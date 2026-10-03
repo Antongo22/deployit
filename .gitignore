@@ -1,0 +1,29 @@
+# .NET build output
+[Bb]in/
+[Oo]bj/
+[Aa]rtifacts/
+[Pp]ublish/
+
+# Test and coverage output
+[Tt]est[Rr]esult*/
+coverage/
+coverage.*
+
+# Visual Studio and JetBrains Rider
+.vs/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Local tooling and generated files
+.vscode/
+*.log
+*.cache
+*.tmp
+*.bak
+
+# OS files
+.DS_Store
+Thumbs.db
