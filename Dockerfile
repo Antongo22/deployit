@@ -25,7 +25,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certifi
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /data && chown "$APP_UID:$APP_UID" /data
 WORKDIR /app
-COPY --from=build /out .
+COPY --from=build --chown=app:app /out .
 ENV ASPNETCORE_HTTP_PORTS=8080 DataDirectory=/data
 USER $APP_UID
 EXPOSE 8080

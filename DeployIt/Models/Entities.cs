@@ -37,7 +37,7 @@ public sealed class DeploymentProject
     public string ProtectedPrivateKey { get; set; } = "";
     public string ProtectedPassphrase { get; set; } = "";
     public string WorkingDirectory { get; set; } = "";
-    public string DeployCommand { get; set; } = "docker compose up -d --build";
+    public string DeployCommand { get; set; } = "docker compose up -d --build --wait --wait-timeout 120";
     public string RestartCommand { get; set; } = "docker compose up -d --force-recreate --no-build";
     public int TimeoutMinutes { get; set; } = 20;
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;

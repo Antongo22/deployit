@@ -35,7 +35,7 @@ public sealed class ProjectInput
     [StringLength(20000)] public string PrivateKey { get; set; } = "";
     [StringLength(500)] public string Passphrase { get; set; } = "";
     [Required, StringLength(500)] public string WorkingDirectory { get; set; } = "/opt/deployit/app";
-    [Required, StringLength(10000)] public string DeployCommand { get; set; } = "docker compose up -d --build";
+    [Required, StringLength(10000)] public string DeployCommand { get; set; } = "docker compose up -d --build --wait --wait-timeout 120";
     [Required(ErrorMessage = "Укажите команду перезапуска. Пример для Compose: docker compose up -d --force-recreate --no-build."), StringLength(10000)]
     public string RestartCommand { get; set; } = "docker compose up -d --force-recreate --no-build";
     [Range(1, 120)] public int TimeoutMinutes { get; set; } = 20;
