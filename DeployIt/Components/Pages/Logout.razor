@@ -1,0 +1,8 @@
+@page "/logout"
+@attribute [Authorize]
+@attribute [ExcludeFromInteractiveRouting]
+@layout LoginLayout
+<PageTitle>Выход · DeployIt</PageTitle>
+<div class="login-card"><h1>Выйти из панели?</h1><p class="muted">Запущенные деплои продолжат выполняться.</p>
+    <form method="post" action="/auth/logout"><AntiforgeryToken /><button class="button primary" type="submit">Выйти</button> <a class="button" href="/">Остаться</a></form>
+</div>

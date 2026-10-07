@@ -1,3 +1,7 @@
 <Solution>
+  <Folder Name="/tests/">
+    <Project Path="tests/DeployIt.Smoke/DeployIt.Smoke.csproj" />
+    <Project Path="tests/DeployIt.Tests/DeployIt.Tests.csproj" />
+  </Folder>
   <Project Path="DeployIt/DeployIt.csproj" />
 </Solution>

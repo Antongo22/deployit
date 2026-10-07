@@ -1,0 +1,39 @@
+services:
+  app:
+    networks:
+      default:
+        aliases: ["deployit-web"]
+  ssh-target:
+    build:
+      context: ./tests/ssh-target
+    volumes:
+      - fixture-keys:/fixture
+      - fixture-releases:/opt/apps
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /fixture/client && pgrep -x sshd >/dev/null"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+  smoke:
+    build:
+      context: .
+      target: smoke
+    depends_on:
+      app:
+        condition: service_healthy
+      ssh-target:
+        condition: service_healthy
+    environment:
+      SMOKE_BASE_URL: http://deployit-web:8080
+      SMOKE_ADMIN_USERNAME: ${DEPLOYIT_ADMIN_USERNAME:-admin}
+      SMOKE_ADMIN_PASSWORD: ${DEPLOYIT_ADMIN_PASSWORD:-}
+    volumes:
+      - data:/panel-data:ro
+      - fixture-keys:/fixture:ro
+      - fixture-releases:/target-data:ro
+      - ./artifacts:/artifacts
+    init: true
+    shm_size: 256mb
+volumes:
+  fixture-keys:
+  fixture-releases:

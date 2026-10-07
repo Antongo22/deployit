@@ -1,0 +1,20 @@
+@page "/login"
+@attribute [AllowAnonymous]
+@attribute [ExcludeFromInteractiveRouting]
+@layout LoginLayout
+<PageTitle>Вход · DeployIt</PageTitle>
+<div class="login-card">
+    <a href="/" class="brand"><span class="brand-symbol">↗</span> Deploy<span>It</span></a>
+    <div class="eyebrow">ВАШ ЦЕНТР ДЕПЛОЯ</div>
+    <h1>От коммита<br />до сервера.</h1>
+    <p class="muted">Войдите, чтобы управлять проектами и запускать деплой.</p>
+    @if (Error is not null) { <div class="alert error">Неверное имя пользователя или пароль.</div> }
+    <form method="post" action="/auth/login">
+        <AntiforgeryToken />
+        <label>Имя пользователя<input name="username" autocomplete="username" required autofocus /></label>
+        <label>Пароль<input name="password" type="password" autocomplete="current-password" required /></label>
+        <button type="submit" class="button primary full">Войти в панель <span>↗</span></button>
+    </form>
+    <small class="muted">При первом запуске пароль администратора создаётся автоматически.<br />Команда для получения пароля указана в README.</small>
+</div>
+@code { [SupplyParameterFromQuery(Name = "error")] public string? Error { get; set; } }

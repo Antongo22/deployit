@@ -1,0 +1,2 @@
+<span class="badge badge-@(Status?.ToString().ToLowerInvariant() ?? "empty")"><span class="dot"></span>@Ui.Status(Status)</span>
+@code { [Parameter] public DeploymentStatus? Status { get; set; } }

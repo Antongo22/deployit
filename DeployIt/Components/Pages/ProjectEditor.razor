@@ -1,0 +1,79 @@
+@page "/projects/new"
+@page "/projects/{Id:guid}/edit"
+@attribute [Authorize]
+@inject ProjectService Service
+@inject SshDeploymentService Ssh
+@inject NavigationManager Navigation
+<PageTitle>@(Id.HasValue ? "Настройки проекта" : "Новый проект") · DeployIt</PageTitle>
+<a class="back-link" href="@(Id.HasValue ? $"/projects/{Id}" : "/")">← К проектам</a>
+<div class="page-heading"><div><div class="eyebrow">НАСТРОЙТЕ ОДИН РАЗ</div><h1>@(Id.HasValue ? "Настройки проекта" : "Новый проект")<span class="heading-dot">.</span></h1><p class="muted">Свяжите репозиторий с сервером и задайте команду деплоя.</p></div></div>
+@if (error is not null) { <div class="alert error" role="alert">@error</div> }
+@if (loading) { <div class="empty">Загрузка настроек…</div> }
+else if (connections.Count == 0) { <div class="empty"><h2>Сначала подключите Git-сервис</h2><a href="/connections" class="button primary">Подключить GitHub / GitLab</a></div> }
+else
+{
+    <EditForm Model="input" OnValidSubmit="Save" FormName="project">
+    <DataAnnotationsValidator /><ValidationSummary />
+    <div class="editor-grid">
+        <section class="panel"><div class="step"><span>01</span><h2>Проект и репозиторий</h2></div>
+            <label>Название проекта<InputText @bind-Value="input.Name" placeholder="Например, API магазина" /></label>
+            <label>Git-подключение<InputSelect @bind-Value="input.ConnectionId" @bind-Value:after="ConnectionChanged">@foreach (var c in connections) { <option value="@c.Id">@c.Name · @c.Provider</option> }</InputSelect></label>
+            <label>Репозиторий<InputSelect @bind-Value="input.RepositoryId" @bind-Value:after="RepositoryChanged" disabled="@repositoriesLoading"><option value="">@(repositoriesLoading ? "Загружаем репозитории…" : "Выберите репозиторий")</option>@foreach (var r in repositories) { <option value="@r.Id">@r.Name</option> }</InputSelect></label>
+            <label>Ветка<InputText @bind-Value="input.Branch" placeholder="main" /></label>
+        </section>
+        <section class="panel"><div class="step"><span>02</span><h2>SSH-сервер</h2></div>
+            <div class="fields-row host-port"><label>Адрес сервера<InputText @bind-Value="input.Host" placeholder="192.0.2.10 или app.example.com" /></label><label>Порт<InputNumber @bind-Value="input.Port" /></label></div>
+            <label>SSH-пользователь<InputText @bind-Value="input.Username" placeholder="deploy" /></label>
+            <label>Отпечаток SSH-ключа сервера<InputText class="mono" @bind-Value="input.HostFingerprint" placeholder="SHA256:…" /></label>
+            <button class="button subtle" type="button" disabled="@(busy || probing)" @onclick="Probe">@(probing ? "Подключаемся…" : "Получить отпечаток")</button>
+            <p class="form-note">Перед сохранением сверьте отпечаток с сервером: <code>ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub</code>. При его изменении соединение будет отклонено.</p>
+            <label>Приватный SSH-ключ<InputTextArea class="mono" @bind-Value="input.PrivateKey" rows="5" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" /><small>@(Id.HasValue ? "Оставьте пустым, чтобы сохранить текущий ключ. Новый ключ заменяет его вместе с паролем." : "Публичная часть ключа должна находиться в authorized_keys пользователя на сервере.")</small></label>
+            <label>Пароль SSH-ключа, если установлен<InputText type="password" @bind-Value="input.Passphrase" autocomplete="off" /></label>
+        </section>
+        <section class="panel deploy-config"><div class="step"><span>03</span><h2>Как разворачиваем?</h2></div>
+            <div class="fields-row"><label>Корневой каталог на сервере<InputText class="mono" @bind-Value="input.WorkingDirectory" /><small>Код попадает в releases/&lt;id&gt;. После успеха обновляется ссылка current.</small></label><label>Таймаут, минут<InputNumber @bind-Value="input.TimeoutMinutes" min="1" max="120" /></label></div>
+            <label>Команда деплоя<InputTextArea class="mono" @bind-Value="input.DeployCommand" rows="4" /><small>Выполняется через bash из каталога полученного кода. Ненулевой код завершения означает ошибку.</small></label>
+            <div class="form-note">Доступны <code>DEPLOYIT_RELEASE_DIR</code>, <code>DEPLOYIT_PROJECT_DIR</code> и стабильный <code>COMPOSE_PROJECT_NAME</code>. Файлы окружения можно хранить вне releases.</div>
+        </section>
+    </div>
+    <div class="editor-actions"><a href="/" class="button">Отмена</a><button class="button primary" type="submit" disabled="@(busy || probing || repositoriesLoading)">@(busy ? "Сохраняем…" : "Сохранить проект ↗")</button></div>
+    </EditForm>
+}
+@code {
+    [Parameter] public Guid? Id { get; set; }
+    private ProjectInput input = new();
+    private List<ConnectionView> connections = [];
+    private List<RepositoryView> repositories = [];
+    private bool busy, probing, repositoriesLoading, loading = true;
+    private string? error;
+    protected override async Task OnParametersSetAsync() {
+        loading = true; error = null;
+        try {
+            connections = await Service.ConnectionsAsync();
+            if (Id.HasValue) {
+                var p = await Service.ProjectAsync(Id.Value);
+                input = new() { Name = p.Name, ConnectionId = p.ConnectionId, RepositoryId = p.RepositoryId,
+                    Branch = p.Branch, Host = p.Host, Port = p.Port, Username = p.Username,
+                    HostFingerprint = p.HostFingerprint, WorkingDirectory = p.WorkingDirectory,
+                    DeployCommand = p.DeployCommand, TimeoutMinutes = p.TimeoutMinutes };
+            } else { input = new(); if (connections.Count > 0) input.ConnectionId = connections[0].Id; }
+            if (connections.Count > 0) await LoadRepositories();
+        } catch (Exception e) { error = Ui.Error(e); } finally { loading = false; }
+    }
+    private async Task LoadRepositories() { repositoriesLoading = true;
+        try { repositories = await Service.RepositoriesAsync(input.ConnectionId); }
+        catch (Exception e) { repositories = []; error = Ui.Error(e); } finally { repositoriesLoading = false; }
+    }
+    private async Task ConnectionChanged() { input.RepositoryId = ""; error = null; await LoadRepositories(); }
+    private void RepositoryChanged() { var repository = repositories.FirstOrDefault(r => r.Id == input.RepositoryId);
+        if (repository is not null) { input.Branch = repository.DefaultBranch; if (string.IsNullOrWhiteSpace(input.Name)) input.Name = repository.Name.Split('/').Last(); }
+    }
+    private async Task Probe() { probing = true; error = null;
+        try { input.HostFingerprint = await Ssh.ProbeAsync(input.Host, input.Port); }
+        catch (Exception e) { error = Ui.Error(e); } finally { probing = false; }
+    }
+    private async Task Save() { busy = true; error = null;
+        try { var project = await Service.SaveProjectAsync(input, Id); input.PrivateKey = input.Passphrase = ""; Navigation.NavigateTo($"/projects/{project.Id}"); }
+        catch (Exception e) { error = Ui.Error(e); } finally { busy = false; }
+    }
+}

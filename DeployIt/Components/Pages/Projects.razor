@@ -1,0 +1,57 @@
+@page "/"
+@attribute [Authorize]
+@implements IDisposable
+@inject ProjectService Service
+<PageTitle>Проекты · DeployIt</PageTitle>
+
+<div class="page-heading"><div><div class="eyebrow">РЕПОЗИТОРИЙ → СЕРВЕР</div><h1>Ваши проекты<span class="heading-dot">.</span></h1><p class="muted">Обновляйте приложения и следите за каждым запуском.</p></div>
+    <a class="button primary" href="/projects/new">＋ Новый проект</a>
+</div>
+@if (error is not null) { <div class="alert error" role="alert">@error</div> }
+<div class="stats">
+    <div class="stat"><span>ВСЕ ПРОЕКТЫ</span><strong>@projects.Count</strong><small>Репозиторий и сервер — 1:1</small></div>
+    <div class="stat"><span>АКТИВНЫЕ ДЕПЛОИ</span><strong class="accent">@projects.Count(p => Ui.Active(p.LatestDeployment?.Status))</strong><small>В очереди или выполняются</small></div>
+    <div class="stat"><span>ПОСЛЕДНИЙ ЗАПУСК УСПЕШЕН</span><strong>@projects.Count(p => p.LatestDeployment?.Status == DeploymentStatus.Succeeded)</strong><small>Из всех настроенных проектов</small></div>
+</div>
+<div class="section-heading"><h2>Проекты <span class="count">@projects.Count</span></h2><input class="search" @bind="search" @bind:event="oninput" placeholder="Найти проект…" aria-label="Поиск проекта" /></div>
+@if (loading) { <div class="empty">Загрузка проектов…</div> }
+else if (projects.Count == 0)
+{
+    <div class="empty"><div class="empty-symbol">↗</div><h2>Первый деплой начинается здесь</h2><p>Подключите GitHub или GitLab, затем привяжите репозиторий к серверу.</p><a href="/connections" class="button primary">Подключить Git-сервис</a></div>
+}
+else
+{
+    <div class="project-grid">
+    @foreach (var project in projects.Where(p => (p.Name + p.RepositoryName + p.Host).Contains(search, StringComparison.OrdinalIgnoreCase)))
+    {
+        <article class="project-card">
+            <div class="card-top"><span class="project-icon">↗</span><StatusBadge Status="project.LatestDeployment?.Status" /></div>
+            <a class="project-title" href="@($"/projects/{project.Id}")">@project.Name</a>
+            <a class="repository" href="@Ui.RepositoryLink(project.RepositoryUrl)" target="_blank" rel="noopener">@project.RepositoryName ↗</a>
+            <div class="project-meta"><span>⌘ @project.Branch</span><span>▤ @project.Host:@project.Port</span></div>
+            <div class="last-run"><span>Успешный коммит <code>@Ui.Commit(project.LastSuccessfulDeployment?.CommitSha)</code></span><small>@Ui.Time(project.LatestDeployment?.CreatedAt) МСК</small></div>
+            <div class="card-actions"><a class="button subtle" href="@($"/projects/{project.Id}")">История и журнал</a><button class="button primary" disabled="@(busy == project.Id || Ui.Active(project.LatestDeployment?.Status))" @onclick="() => Deploy(project.Id)">@(Ui.Active(project.LatestDeployment?.Status) ? "В работе…" : "Развернуть ↗")</button></div>
+        </article>
+    }
+    </div>
+}
+@code {
+    private List<ProjectView> projects = [];
+    private bool loading = true;
+    private string search = "";
+    private string? error;
+    private Guid? busy;
+    private readonly CancellationTokenSource lifetime = new();
+    protected override async Task OnInitializedAsync() { await Refresh(); _ = Poll(); }
+    private async Task Refresh() { try { projects = await Service.ProjectsAsync(lifetime.Token); } catch (OperationCanceledException) { } catch (Exception e) { error = Ui.Error(e); } loading = false; }
+    private async Task Deploy(Guid id) {
+        busy = id; error = null;
+        try { await Service.EnqueueAsync(id, lifetime.Token); await Refresh(); } catch (Exception e) { error = Ui.Error(e); }
+        finally { busy = null; }
+    }
+    private async Task Poll() {
+        try { while (!lifetime.IsCancellationRequested) { await Task.Delay(2500, lifetime.Token); await InvokeAsync(async () => { await Refresh(); StateHasChanged(); }); } }
+        catch (OperationCanceledException) { }
+    }
+    public void Dispose() { lifetime.Cancel(); lifetime.Dispose(); }
+}

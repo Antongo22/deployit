@@ -1,0 +1,58 @@
+namespace DeployIt.Models;
+
+public enum GitProvider { GitHub, GitLab }
+public enum DeploymentStatus { Queued, Running, Succeeded, Failed, Interrupted }
+
+public sealed class GitConnection
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public string Name { get; set; } = "";
+    public GitProvider Provider { get; set; }
+    public string BaseUrl { get; set; } = "";
+    public string Account { get; set; } = "";
+    public string ExternalUserId { get; set; } = "";
+    public bool PublicOnly { get; set; }
+    public string ProtectedToken { get; set; } = "";
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
+public sealed class DeploymentProject
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid ConnectionId { get; set; }
+    public GitConnection Connection { get; set; } = null!;
+    public string Name { get; set; } = "";
+    public string RepositoryId { get; set; } = "";
+    public string RepositoryName { get; set; } = "";
+    public string RepositoryUrl { get; set; } = "";
+    public string Branch { get; set; } = "main";
+    public string Host { get; set; } = "";
+    public int Port { get; set; } = 22;
+    public string Username { get; set; } = "deploy";
+    public string HostFingerprint { get; set; } = "";
+    public string ProtectedPrivateKey { get; set; } = "";
+    public string ProtectedPassphrase { get; set; } = "";
+    public string WorkingDirectory { get; set; } = "";
+    public string DeployCommand { get; set; } = "docker compose up -d --build";
+    public int TimeoutMinutes { get; set; } = 20;
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    public List<Deployment> Deployments { get; set; } = [];
+}
+
+public sealed class Deployment
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid ProjectId { get; set; }
+    public DeploymentProject Project { get; set; } = null!;
+    public DeploymentStatus Status { get; set; } = DeploymentStatus.Queued;
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset? StartedAt { get; set; }
+    public DateTimeOffset? FinishedAt { get; set; }
+    public string? CommitSha { get; set; }
+    public int? ExitCode { get; set; }
+    public string Log { get; set; } = "";
+    public bool LogTruncated { get; set; }
+    public string ProtectedSnapshot { get; set; } = "";
+}
+
+public sealed record DeploymentSnapshot(DeploymentProject Project, GitConnection Connection);

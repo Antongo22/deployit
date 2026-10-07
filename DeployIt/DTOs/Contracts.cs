@@ -1,0 +1,53 @@
+using System.ComponentModel.DataAnnotations;
+using DeployIt.Models;
+
+namespace DeployIt.DTOs;
+
+public sealed class ConnectionInput
+{
+    [Required, StringLength(100)] public string Name { get; set; } = "";
+    public GitProvider Provider { get; set; }
+    [Required, Url] public string BaseUrl { get; set; } = "https://github.com";
+    public bool PublicOnly { get; set; }
+    [StringLength(100)] public string Account { get; set; } = "";
+    [StringLength(1000)] public string Token { get; set; } = "";
+}
+
+public sealed class ProjectInput
+{
+    [Required, StringLength(100)] public string Name { get; set; } = "";
+    public Guid ConnectionId { get; set; }
+    [Required] public string RepositoryId { get; set; } = "";
+    [Required, StringLength(200)] public string Branch { get; set; } = "main";
+    [Required, StringLength(253)] public string Host { get; set; } = "";
+    [Range(1, 65535)] public int Port { get; set; } = 22;
+    [Required, StringLength(100)] public string Username { get; set; } = "deploy";
+    [Required, StringLength(100)] public string HostFingerprint { get; set; } = "";
+    [StringLength(20000)] public string PrivateKey { get; set; } = "";
+    [StringLength(500)] public string Passphrase { get; set; } = "";
+    [Required, StringLength(500)] public string WorkingDirectory { get; set; } = "/opt/deployit/app";
+    [Required, StringLength(10000)] public string DeployCommand { get; set; } = "docker compose up -d --build";
+    [Range(1, 120)] public int TimeoutMinutes { get; set; } = 20;
+}
+
+public sealed class HostProbeInput
+{
+    [Required, StringLength(253)] public string Host { get; set; } = "";
+    [Range(1, 65535)] public int Port { get; set; } = 22;
+}
+
+public sealed record ConnectionView(Guid Id, string Name, GitProvider Provider, string BaseUrl,
+    string Account, bool PublicOnly);
+public sealed record RepositoryView(string Id, string Name, string CloneUrl, string DefaultBranch);
+public sealed record DeploymentView(Guid Id, Guid ProjectId, DeploymentStatus Status,
+    DateTimeOffset CreatedAt, DateTimeOffset? StartedAt, DateTimeOffset? FinishedAt,
+    string? CommitSha, int? ExitCode, string? Log);
+public sealed record ProjectView(Guid Id, string Name, Guid ConnectionId, string RepositoryId,
+    string RepositoryName, string RepositoryUrl, string Branch, string Host, int Port, string Username,
+    string HostFingerprint, string WorkingDirectory, string DeployCommand, int TimeoutMinutes,
+    DeploymentView? LatestDeployment, DeploymentView? LastSuccessfulDeployment = null);
+
+public sealed class DomainException(string message, int statusCode = 400) : Exception(message)
+{
+    public int StatusCode { get; } = statusCode;
+}

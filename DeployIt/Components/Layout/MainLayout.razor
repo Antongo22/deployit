@@ -1,0 +1,30 @@
+@inherits LayoutComponentBase
+
+<div class="shell" data-interactive="@interactiveReady.ToString().ToLowerInvariant()">
+    <aside class="sidebar">
+        <a href="/" class="brand"><span class="brand-symbol">↗</span> Deploy<span>It</span></a>
+        <div class="sidebar-label">ПАНЕЛЬ УПРАВЛЕНИЯ</div>
+        <nav>
+            <NavLink href="/" Match="NavLinkMatch.All"><span>▦</span> Проекты</NavLink>
+            <NavLink href="/connections"><span>⌘</span> Git-подключения</NavLink>
+            <a href="/swagger" target="_blank" rel="noopener"><span>⟨⟩</span> API / Swagger <span class="external">↗</span></a>
+        </nav>
+        <div class="sidebar-bottom">
+            <span class="dot"></span> Центральная панель
+            <div class="profile"><span class="avatar">A</span><div><strong><AuthorizeView>@context.User.Identity?.Name</AuthorizeView></strong><small>Администратор</small></div>
+                <a href="/logout" data-enhance-nav="false" title="Выйти">↪</a>
+            </div>
+        </div>
+    </aside>
+    <main class="main">
+        <div class="topbar"><span>WORKSPACE <span class="slash">/</span> DeployIt</span><span class="topbar-label">C# · BLAZOR · SSH</span></div>
+        <div class="content">@Body</div>
+        <footer>DeployIt <span>Одно нажатие. Полная история.</span></footer>
+    </main>
+</div>
+@code {
+    private bool interactiveReady;
+    protected override void OnAfterRender(bool firstRender) {
+        if (firstRender) { interactiveReady = true; StateHasChanged(); }
+    }
+}

@@ -27,3 +27,14 @@ coverage.*
 # OS files
 .DS_Store
 Thumbs.db
+
+# Local configuration, database, and secrets
+.env
+.env.*
+!.env.example
+**/.data/
+*.db
+*.db-shm
+*.db-wal
+*.pem
+*.key

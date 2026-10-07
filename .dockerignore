@@ -1,0 +1,9 @@
+**/bin
+**/obj
+**/.data
+.git
+.env
+.env.*
+artifacts
+**/*.user
+**/.DS_Store

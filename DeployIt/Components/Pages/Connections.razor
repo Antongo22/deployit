@@ -1,0 +1,58 @@
+@page "/connections"
+@attribute [Authorize]
+@inject ProjectService Service
+<PageTitle>Git-подключения · DeployIt</PageTitle>
+<div class="page-heading"><div><div class="eyebrow">ИСТОЧНИКИ КОДА</div><h1>Git-подключения<span class="heading-dot">.</span></h1><p class="muted">Подключите аккаунт один раз и выбирайте доступные репозитории.</p></div></div>
+@if (error is not null) { <div class="alert error" role="alert">@error</div> }
+@if (message is not null) { <div class="alert success">@message</div> }
+<div class="two-columns">
+    <section class="panel"><div class="section-heading"><h2>Подключённые аккаунты</h2><span class="count">@connections.Count</span></div>
+    @if (connections.Count == 0) { <div class="empty small"><span class="empty-symbol">⌘</span><p>GitHub или GitLab появятся здесь после подключения.</p></div> }
+    @foreach (var connection in connections)
+    {
+        <div class="connection-item"><div class="card-top"><strong>@connection.Name</strong><span class="tag">@connection.Provider</span></div><p class="muted">@connection.Account · @(connection.PublicOnly ? "Публичные репозитории" : "Доступ по токену")</p><small class="mono muted">@connection.BaseUrl</small>
+            <div class="inline-actions"><a href="/projects/new" class="button subtle">Создать проект ↗</a>
+                @if (!connection.PublicOnly) { <button class="button subtle" disabled="@busy" @onclick="() => rotate = rotate == connection.Id ? null : connection.Id">Обновить токен</button> }
+                <button class="button danger subtle" disabled="@busy" @onclick="() => confirm = confirm == connection.Id ? null : connection.Id">Удалить</button>
+            </div>
+            @if (confirm == connection.Id) { <div class="alert warning">Удалить подключение? <button class="button danger" disabled="@busy" @onclick="() => Delete(connection.Id)">Да, удалить</button></div> }
+            @if (rotate == connection.Id) { <label>Новый токен того же аккаунта<input type="password" @bind="newToken" autocomplete="off" /></label><button class="button" disabled="@busy" @onclick="() => Rotate(connection.Id)">Сохранить токен</button> }
+        </div>
+    }
+    </section>
+    <section class="panel"><div class="eyebrow">НОВОЕ ПОДКЛЮЧЕНИЕ</div><h2>Откуда берём код?</h2>
+    <EditForm Model="input" OnValidSubmit="Add" FormName="connection">
+        <DataAnnotationsValidator /><ValidationSummary />
+        <label>Git-сервис<InputSelect @bind-Value="input.Provider" @bind-Value:after="ProviderChanged"><option value="@GitProvider.GitHub">GitHub</option><option value="@GitProvider.GitLab">GitLab</option></InputSelect></label>
+        <label>Название подключения<InputText @bind-Value="input.Name" placeholder="Например, рабочий GitHub" /></label>
+        <label>Адрес сервиса<InputText @bind-Value="input.BaseUrl" /><small>GitHub.com или HTTPS-адрес вашего GitLab.</small></label>
+        <label class="checkbox"><InputCheckbox @bind-Value="input.PublicOnly" /> Только публичные репозитории, без токена</label>
+        @if (input.PublicOnly) { <label>Имя аккаунта<InputText @bind-Value="input.Account" placeholder="username" /></label> }
+        else { <label>Access token<InputText type="password" @bind-Value="input.Token" autocomplete="off" /><small>GitHub: доступ к Metadata и Contents выбранных репозиториев. GitLab: read_api и read_repository.</small></label> }
+        <p class="form-note">Токен проверяется при подключении и сохраняется в зашифрованном виде.</p>
+        <button class="button primary full" type="submit" disabled="@busy">@(busy ? "Проверяем подключение…" : "Подключить аккаунт ↗")</button>
+    </EditForm>
+    </section>
+</div>
+@code {
+    private List<ConnectionView> connections = [];
+    private ConnectionInput input = new();
+    private bool busy;
+    private string? error, message;
+    private string newToken = "";
+    private Guid? confirm, rotate;
+    protected override async Task OnInitializedAsync() { try { connections = await Service.ConnectionsAsync(); } catch (Exception e) { error = Ui.Error(e); } }
+    private void ProviderChanged() => input.BaseUrl = input.Provider == GitProvider.GitHub ? "https://github.com" : "https://gitlab.com";
+    private async Task Add() { busy = true; error = message = null;
+        try { await Service.AddConnectionAsync(input); input = new(); connections = await Service.ConnectionsAsync(); message = "Аккаунт подключён. Теперь можно создать проект."; }
+        catch (Exception e) { error = Ui.Error(e); } finally { busy = false; }
+    }
+    private async Task Delete(Guid id) { busy = true; error = message = null;
+        try { await Service.DeleteConnectionAsync(id); confirm = null; connections = await Service.ConnectionsAsync(); }
+        catch (Exception e) { error = Ui.Error(e); } finally { busy = false; }
+    }
+    private async Task Rotate(Guid id) { busy = true; error = message = null;
+        try { await Service.UpdateTokenAsync(id, newToken); newToken = ""; rotate = null; message = "Токен обновлён."; }
+        catch (Exception e) { error = Ui.Error(e); } finally { busy = false; }
+    }
+}

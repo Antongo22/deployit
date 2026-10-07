@@ -1,0 +1,38 @@
+name: deployit
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "${DEPLOYIT_BIND_ADDRESS:-127.0.0.1}:${DEPLOYIT_PORT:-8080}:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      DataDirectory: /data
+      Admin__Username: ${DEPLOYIT_ADMIN_USERNAME:-admin}
+      Admin__Password: ${DEPLOYIT_ADMIN_PASSWORD:-}
+    volumes:
+      - data:/data
+    restart: unless-stopped
+    stop_grace_period: 30s
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+  tests:
+    profiles: ["test"]
+    build:
+      context: .
+      target: tests
+    restart: "no"
+volumes:
+  data:

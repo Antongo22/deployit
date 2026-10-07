@@ -1,6 +1,11 @@
-@DeployIt_HostAddress = http://localhost:5192
+@DeployIt_HostAddress = http://localhost:8080
 
-GET {{DeployIt_HostAddress}}/weatherforecast/
+# Анонимная проверка готовности.
+GET {{DeployIt_HostAddress}}/health
 Accept: application/json
 
 ###
+# Войдите в панель; защищённые запросы удобно выполнять через /swagger.
+# Swagger сам получает CSRF-токен для операций изменения.
+GET {{DeployIt_HostAddress}}/api/projects
+Accept: application/json
