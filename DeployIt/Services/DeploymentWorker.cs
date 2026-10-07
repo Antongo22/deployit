@@ -119,9 +119,13 @@ public sealed class DeploymentWorker(IDbContextFactory<DeployItDbContext> factor
             sensitive.Add(password);
             sensitive.AddRange(password.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries));
             monitor = WatchCancellation(snapshot.Project);
-            exit = deployment.Operation == DeploymentOperation.Restart
-                ? await ssh.RestartAsync(snapshot, Append, execution.Token, deployment.Id)
-                : await ssh.DeployAsync(snapshot, deployment.Id, Append, execution.Token);
+            exit = deployment.Operation switch
+            {
+                DeploymentOperation.Restart => await ssh.RestartAsync(snapshot, Append, execution.Token, deployment.Id),
+                DeploymentOperation.Stop => await ssh.StopAsync(snapshot, deployment.Id, Append, execution.Token),
+                DeploymentOperation.Deploy => await ssh.DeployAsync(snapshot, deployment.Id, Append, execution.Token),
+                _ => throw new DomainException("Неизвестное действие проекта. Обновите панель и повторите запуск.")
+            };
             status = exit == 0 ? DeploymentStatus.Succeeded : DeploymentStatus.Failed;
             if (exit != 0) error = DeploymentDiagnostics.Failure(exit, stage, tail, snapshot.Project.TimeoutMinutes);
         }

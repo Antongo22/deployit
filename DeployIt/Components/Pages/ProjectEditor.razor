@@ -43,6 +43,7 @@ else
             <div class="fields-row"><label>Корневой каталог на сервере<InputText class="mono" @bind-Value="input.WorkingDirectory" /><small>Код попадает в releases/&lt;id&gt;. После успеха обновляется ссылка current.</small></label><label>Таймаут, минут<InputNumber @bind-Value="input.TimeoutMinutes" min="1" max="120" /></label></div>
             <label>Команда деплоя<InputTextArea class="mono" @bind-Value="input.DeployCommand" rows="4" /><small>Выполняется через bash из каталога полученного кода. Ненулевой код завершения означает ошибку.</small></label>
             <label>Команда перезапуска<InputTextArea class="mono" @bind-Value="input.RestartCommand" rows="3" /><small>Запускается из текущего релиза без загрузки репозитория. Пример для Compose: docker compose up -d --force-recreate --no-build. Для systemd укажите команду перезапуска своего сервиса.</small></label>
+            <label>Команда остановки<InputTextArea class="mono" @bind-Value="input.StopCommand" rows="3" /><small>Выполняется из текущего успешного релиза. Пример для Compose: docker compose stop. Для systemd: sudo -n systemctl stop my-app. По умолчанию контейнеры останавливаются с сохранением томов и файлов проекта.</small></label>
             <div class="form-note">Доступны <code>DEPLOYIT_RELEASE_DIR</code>, <code>DEPLOYIT_PROJECT_DIR</code>, <code>DEPLOYIT_ENV_FILE</code> и стабильный <code>COMPOSE_PROJECT_NAME</code>. Серверный .env редактируется на странице проекта.</div>
         </section>
     </div>
@@ -69,7 +70,7 @@ else
                     Branch = p.Branch, Host = p.Host, Port = p.Port, Username = p.Username,
                     AuthenticationType = p.AuthenticationType,
                     HostFingerprint = p.HostFingerprint, WorkingDirectory = p.WorkingDirectory,
-                    DeployCommand = p.DeployCommand, RestartCommand = p.RestartCommand, TimeoutMinutes = p.TimeoutMinutes };
+                    DeployCommand = p.DeployCommand, RestartCommand = p.RestartCommand, StopCommand = p.StopCommand, TimeoutMinutes = p.TimeoutMinutes };
             } else { input = new(); if (connections.Count > 0) input.ConnectionId = connections[0].Id; }
             if (connections.Count > 0) await LoadRepositories();
         } catch (Exception e) { error = Ui.Error(e); } finally { loading = false; }

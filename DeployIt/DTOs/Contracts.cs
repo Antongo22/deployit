@@ -38,6 +38,8 @@ public sealed class ProjectInput
     [Required, StringLength(10000)] public string DeployCommand { get; set; } = "docker compose up -d --build --wait --wait-timeout 120";
     [Required(ErrorMessage = "Укажите команду перезапуска. Пример для Compose: docker compose up -d --force-recreate --no-build."), StringLength(10000)]
     public string RestartCommand { get; set; } = "docker compose up -d --force-recreate --no-build";
+    [Required(ErrorMessage = "Укажите команду остановки. Пример для Compose: docker compose stop."), StringLength(10000)]
+    public string StopCommand { get; set; } = "docker compose stop";
     [Range(1, 120)] public int TimeoutMinutes { get; set; } = 20;
 }
 
@@ -59,7 +61,8 @@ public sealed record ProjectView(Guid Id, string Name, Guid ConnectionId, string
     string HostFingerprint, string WorkingDirectory, string DeployCommand, int TimeoutMinutes,
     DeploymentView? LatestDeployment, DeploymentView? LastSuccessfulDeployment = null,
     SshAuthenticationType AuthenticationType = SshAuthenticationType.PrivateKey,
-    string RestartCommand = "docker compose up -d --force-recreate --no-build");
+    string RestartCommand = "docker compose up -d --force-recreate --no-build",
+    string StopCommand = "docker compose stop");
 
 public sealed class EnvironmentFileInput
 {

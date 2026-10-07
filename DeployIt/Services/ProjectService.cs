@@ -122,6 +122,8 @@ public sealed class ProjectService(IDbContextFactory<DeployItDbContext> factory,
             throw new DomainException("Укажите команду деплоя.");
         if (string.IsNullOrWhiteSpace(input.RestartCommand) || input.RestartCommand.Contains('\0'))
             throw new DomainException("Укажите команду перезапуска. Пример для Compose: docker compose up -d --force-recreate --no-build.");
+        if (string.IsNullOrWhiteSpace(input.StopCommand) || input.StopCommand.Contains('\0'))
+            throw new DomainException("Укажите команду остановки. Пример для Compose: docker compose stop.");
 
         await using var db = await factory.CreateDbContextAsync(ct);
         var project = id.HasValue
@@ -170,6 +172,7 @@ public sealed class ProjectService(IDbContextFactory<DeployItDbContext> factory,
         project.HostFingerprint = input.HostFingerprint.Trim();
         project.WorkingDirectory = input.WorkingDirectory.TrimEnd('/');
         project.DeployCommand = input.DeployCommand; project.RestartCommand = input.RestartCommand;
+        project.StopCommand = input.StopCommand;
         project.TimeoutMinutes = input.TimeoutMinutes;
         if (!id.HasValue) db.Projects.Add(project);
         try { await db.SaveChangesAsync(ct); }
@@ -206,6 +209,12 @@ public sealed class ProjectService(IDbContextFactory<DeployItDbContext> factory,
         try { return await EnqueueCoreAsync(projectId, ct, DeploymentOperation.Restart); }
         finally { mutationGate.Release(); }
     }
+    public async Task<DeploymentView> EnqueueStopAsync(Guid projectId, CancellationToken ct = default)
+    {
+        await mutationGate.WaitAsync(ct);
+        try { return await EnqueueCoreAsync(projectId, ct, DeploymentOperation.Stop); }
+        finally { mutationGate.Release(); }
+    }
     private async Task<DeploymentView> EnqueueCoreAsync(Guid projectId, CancellationToken ct,
         DeploymentOperation operation = DeploymentOperation.Deploy)
     {
@@ -214,12 +223,12 @@ public sealed class ProjectService(IDbContextFactory<DeployItDbContext> factory,
             ?? throw new DomainException("Проект не найден.", 404);
         if (await db.Deployments.AnyAsync(d => d.ProjectId == projectId &&
             (d.Status == DeploymentStatus.Queued || d.Status == DeploymentStatus.Running), ct))
-            throw new DomainException("Деплой или перезапуск этого проекта уже в очереди или выполняется. Дождитесь завершения.", 409);
+            throw new DomainException("Деплой, перезапуск или остановка этого проекта уже в очереди или выполняется. Дождитесь завершения или прервите текущий запуск.", 409);
         var run = new Deployment { ProjectId = projectId, Operation = operation,
             ProtectedSnapshot = secrets.Protect(JsonSerializer.Serialize(new DeploymentSnapshot(project, project.Connection))) };
         db.Deployments.Add(run);
         try { await db.SaveChangesAsync(ct); }
-        catch (DbUpdateException) { throw new DomainException("Деплой этого проекта уже в очереди или выполняется.", 409); }
+        catch (DbUpdateException) { throw new DomainException("Запуск этого проекта уже в очереди или выполняется.", 409); }
         return View(run);
     }
 
@@ -277,7 +286,7 @@ public sealed class ProjectService(IDbContextFactory<DeployItDbContext> factory,
     private static ConnectionView View(GitConnection c) => new(c.Id, c.Name, c.Provider, c.BaseUrl, c.Account, c.PublicOnly);
     private static ProjectView View(DeploymentProject p, DeploymentView? run, DeploymentView? successful = null) => new(p.Id, p.Name, p.ConnectionId,
         p.RepositoryId, p.RepositoryName, p.RepositoryUrl, p.Branch, p.Host, p.Port, p.Username,
-        p.HostFingerprint, p.WorkingDirectory, p.DeployCommand, p.TimeoutMinutes, run, successful, p.AuthenticationType, p.RestartCommand);
+        p.HostFingerprint, p.WorkingDirectory, p.DeployCommand, p.TimeoutMinutes, run, successful, p.AuthenticationType, p.RestartCommand, p.StopCommand);
     public static DeploymentView View(Deployment d, bool log = false) => new(d.Id, d.ProjectId, d.Status,
         d.CreatedAt, d.StartedAt, d.FinishedAt, d.CommitSha, d.ExitCode, log ? d.Log : null, d.Operation,
         DeploymentDiagnostics.StageName(log && d.Stage == "" ? DeploymentDiagnostics.InferStage(d.Log) : d.Stage), d.ErrorMessage ?? (log && d.Status == DeploymentStatus.Failed

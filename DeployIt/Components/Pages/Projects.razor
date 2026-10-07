@@ -25,7 +25,7 @@ else
     @foreach (var project in projects.Where(p => (p.Name + p.RepositoryName + p.Host).Contains(search, StringComparison.OrdinalIgnoreCase)))
     {
         <article class="project-card">
-            <div class="card-top"><span class="project-icon">↗</span><StatusBadge Status="project.LatestDeployment?.Status" /></div>
+            <div class="card-top"><span class="project-icon">↗</span><StatusBadge Status="project.LatestDeployment?.Status" Stopped="Ui.Stopped(project.LatestDeployment)" /></div>
             <a class="project-title" href="@($"/projects/{project.Id}")">@project.Name</a>
             <a class="repository" href="@Ui.RepositoryLink(project.RepositoryUrl)" target="_blank" rel="noopener">@project.RepositoryName ↗</a>
             <div class="project-meta"><span>⌘ @project.Branch</span><span>▤ @project.Host:@project.Port</span></div>

@@ -6,7 +6,7 @@
         <div class="inline-actions">
             @if (Ui.Active(Run.Status))
             {
-                <button class="button danger" disabled="@(Busy || Run.CancelRequested)" @onclick="() => OnCancel.InvokeAsync(Run.Id)">@(Run.CancelRequested ? "Останавливаем…" : Run.Status == DeploymentStatus.Queued ? "Снять с очереди" : "Остановить")</button>
+                <button class="button danger" disabled="@(Busy || Run.CancelRequested)" @onclick="() => OnCancel.InvokeAsync(Run.Id)">@(Run.CancelRequested ? "Прерываем запуск…" : Run.Status == DeploymentStatus.Queued ? "Снять с очереди" : "Прервать запуск")</button>
             }
             <StatusBadge Status="Run.Status" />
         </div>

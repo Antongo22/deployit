@@ -20,6 +20,8 @@ public sealed class ProjectsController(ProjectService projects, SshDeploymentSer
     { var run = await projects.EnqueueAsync(id, ct); return Accepted($"/api/deployments/{run.Id}", run); }
     [HttpPost("{id:guid}/restart")] public async Task<IActionResult> Restart(Guid id, CancellationToken ct)
     { var run = await projects.EnqueueRestartAsync(id, ct); return Accepted($"/api/deployments/{run.Id}", run); }
+    [HttpPost("{id:guid}/stop")] public async Task<IActionResult> Stop(Guid id, CancellationToken ct)
+    { var run = await projects.EnqueueStopAsync(id, ct); return Accepted($"/api/deployments/{run.Id}", run); }
     [HttpGet("{id:guid}/environment")]
     [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
     public async Task<EnvironmentFileView> Environment(Guid id, CancellationToken ct)

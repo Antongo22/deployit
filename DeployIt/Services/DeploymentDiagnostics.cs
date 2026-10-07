@@ -10,7 +10,8 @@ public static class DeploymentDiagnostics
         "ssh" => "Подключение по SSH", "credentials" => "Передача доступа к Git",
         "prepare" => "Подготовка каталога", "clone" => "Получение репозитория",
         "environment" => "Подключение .env", "deploy-command" => "Команда деплоя",
-        "restart-command" => "Команда перезапуска", "publish" => "Обновление текущего релиза",
+        "restart-command" => "Команда перезапуска", "stop-command" => "Команда остановки",
+        "publish" => "Обновление текущего релиза",
         "complete" => "Завершено", "" => "Ожидание запуска", _ => stage
     };
 
@@ -18,6 +19,7 @@ public static class DeploymentDiagnostics
     {
         if (log.Contains("Выполнение команды деплоя")) return "deploy-command";
         if (log.Contains("Перезапуск текущего релиза")) return "restart-command";
+        if (log.Contains("Остановка текущего релиза")) return "stop-command";
         if (log.Contains("Клонирование выбранной ветки")) return "clone";
         return "ssh";
     }

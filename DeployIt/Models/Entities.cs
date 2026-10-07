@@ -3,7 +3,7 @@ namespace DeployIt.Models;
 public enum GitProvider { GitHub, GitLab }
 public enum DeploymentStatus { Queued, Running, Succeeded, Failed, Interrupted, Canceled }
 public enum SshAuthenticationType { PrivateKey, Password }
-public enum DeploymentOperation { Deploy, Restart }
+public enum DeploymentOperation { Deploy, Restart, Stop }
 
 public sealed class GitConnection
 {
@@ -39,6 +39,7 @@ public sealed class DeploymentProject
     public string WorkingDirectory { get; set; } = "";
     public string DeployCommand { get; set; } = "docker compose up -d --build --wait --wait-timeout 120";
     public string RestartCommand { get; set; } = "docker compose up -d --force-recreate --no-build";
+    public string StopCommand { get; set; } = "docker compose stop";
     public int TimeoutMinutes { get; set; } = 20;
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public List<Deployment> Deployments { get; set; } = [];

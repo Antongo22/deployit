@@ -1,2 +1,5 @@
-<span class="badge badge-@(Status?.ToString().ToLowerInvariant() ?? "empty")"><span class="dot"></span>@Ui.Status(Status)</span>
-@code { [Parameter] public DeploymentStatus? Status { get; set; } }
+<span class="badge badge-@(Stopped ? "empty" : Status?.ToString().ToLowerInvariant() ?? "empty")"><span class="dot"></span>@(Stopped ? "Остановлен" : Ui.Status(Status))</span>
+@code {
+    [Parameter] public DeploymentStatus? Status { get; set; }
+    [Parameter] public bool Stopped { get; set; }
+}

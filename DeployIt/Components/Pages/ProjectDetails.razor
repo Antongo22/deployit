@@ -11,11 +11,21 @@
 @if (project is null) { <div class="empty">Загрузка проекта…</div> }
 else
 {
-    <div class="page-heading"><div><div class="eyebrow">@project.RepositoryName</div><h1>@project.Name<span class="heading-dot">.</span></h1><div class="inline-actions"><StatusBadge Status="project.LatestDeployment?.Status" /><span class="muted mono">⌘ @project.Branch</span></div></div>
-        <div class="inline-actions"><a class="button" href="@($"/projects/{Id}/edit")">Настройки</a>@if (project.LatestDeployment is { } active && Ui.Active(active.Status)) { <button class="button danger" disabled="@(busy || active.CancelRequested)" @onclick="() => Cancel(active.Id)">@(active.CancelRequested ? "Останавливаем…" : active.Status == DeploymentStatus.Queued ? "Снять с очереди" : "Остановить")</button> }<button class="button" disabled="@(busy || Ui.Active(project.LatestDeployment?.Status))" @onclick="Restart">Перезапустить ↻</button><button class="button primary" disabled="@(busy || Ui.Active(project.LatestDeployment?.Status))" @onclick="Deploy">@(Ui.Active(project.LatestDeployment?.Status) ? project.LatestDeployment?.Operation == DeploymentOperation.Restart ? "Перезапуск в работе…" : "Деплой в работе…" : "Развернуть ↗")</button></div>
+    <div class="page-heading"><div><div class="eyebrow">@project.RepositoryName</div><h1>@project.Name<span class="heading-dot">.</span></h1><div class="inline-actions"><StatusBadge Status="project.LatestDeployment?.Status" Stopped="Ui.Stopped(project.LatestDeployment)" /><span class="muted mono">⌘ @project.Branch</span></div></div>
+        <div class="inline-actions">
+            <a class="button" href="@($"/projects/{Id}/edit")">Настройки</a>
+            @if (project.LatestDeployment is { } active && Ui.Active(active.Status))
+            {
+                <button class="button danger" disabled="@(busy || active.CancelRequested)" @onclick="() => Cancel(active.Id)">@(active.CancelRequested ? "Прерываем запуск…" : active.Status == DeploymentStatus.Queued ? "Снять с очереди" : "Прервать запуск")</button>
+            }
+            <button class="button danger" disabled="@(busy || Ui.Active(project.LatestDeployment?.Status))" @onclick="Stop">Остановить проект</button>
+            <button class="button" disabled="@(busy || Ui.Active(project.LatestDeployment?.Status))" @onclick="Restart">Перезапустить ↻</button>
+            <button class="button primary" disabled="@(busy || Ui.Active(project.LatestDeployment?.Status))" @onclick="Deploy">@(Ui.Active(project.LatestDeployment?.Status) ? Ui.Operation(project.LatestDeployment!.Operation) + " в работе…" : "Развернуть ↗")</button>
+        </div>
     </div>
     <div class="details-grid"><section class="panel"><div class="section-heading"><h2>Целевой сервер</h2><span class="tag">SSH</span></div><strong class="server-address">@project.Username@@@project.Host:@project.Port</strong><p class="mono muted">@project.WorkingDirectory</p><small class="mono fingerprint">@project.HostFingerprint</small><button class="button subtle" disabled="@busy" @onclick="Check">Проверить SSH</button></section>
-        <section class="panel"><h2>Команда деплоя</h2><pre class="command">@project.DeployCommand</pre><h2>Команда перезапуска</h2><pre class="command">@project.RestartCommand</pre><div class="muted">Ветка <code>@project.Branch</code> · Таймаут @project.TimeoutMinutes мин.</div><p class="form-note">Последний успешный коммит: <code>@Ui.Commit(project.LastSuccessfulDeployment?.CommitSha)</code></p></section></div>
+        <section class="panel"><h2>Команда деплоя</h2><pre class="command">@project.DeployCommand</pre><h2>Команда перезапуска</h2><pre class="command">@project.RestartCommand</pre><h2>Команда остановки</h2><pre class="command">@project.StopCommand</pre><div class="muted">Ветка <code>@project.Branch</code> · Таймаут @project.TimeoutMinutes мин.</div><p class="form-note">Последний успешный коммит: <code>@Ui.Commit(project.LastSuccessfulDeployment?.CommitSha)</code></p></section></div>
+    @if (Ui.Stopped(project.LatestDeployment)) { <div class="alert warning" role="status">Проект остановлен командой из настроек. Для запуска нажмите «Перезапустить» или «Развернуть».</div> }
     <ProjectEnvironment @key="(Id, typeof(DeployIt.Components.Shared.ProjectEnvironment))" ProjectId="Id" WorkingDirectory="@project.WorkingDirectory" />
     <ProjectTerminal @key="(Id, typeof(DeployIt.Components.Shared.ProjectTerminal))" ProjectId="Id" />
     <section class="panel history-panel"><div class="section-heading"><h2>История запусков</h2><small class="muted">Время МСК · последние 100 запусков</small></div>
@@ -57,6 +67,10 @@ else
     }
     private async Task Restart() { busy = true; error = message = null;
         try { selected = await Service.EnqueueRestartAsync(Id, lifetime.Token); await Refresh(); }
+        catch (Exception e) { error = Ui.Error(e); } finally { busy = false; }
+    }
+    private async Task Stop() { busy = true; error = message = null;
+        try { selected = await Service.EnqueueStopAsync(Id, lifetime.Token); await Refresh(); }
         catch (Exception e) { error = Ui.Error(e); } finally { busy = false; }
     }
     private async Task Cancel(Guid runId) { busy = true; error = message = null;

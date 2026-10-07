@@ -137,18 +137,27 @@ public sealed partial class SshDeploymentService(SecretProtector secrets)
     }
 
     public async Task<int> RestartAsync(DeploymentSnapshot snapshot, Func<string, Task> log, CancellationToken ct, Guid? runId = null)
+        => await RunCurrentReleaseAsync(snapshot, runId ?? Guid.NewGuid(), DeploymentOperation.Restart, log, ct);
+
+    public async Task<int> StopAsync(DeploymentSnapshot snapshot, Guid runId, Func<string, Task> log, CancellationToken ct)
+        => await RunCurrentReleaseAsync(snapshot, runId, DeploymentOperation.Stop, log, ct);
+
+    private async Task<int> RunCurrentReleaseAsync(DeploymentSnapshot snapshot, Guid runId,
+        DeploymentOperation operation, Func<string, Task> log, CancellationToken ct)
     {
         var project = snapshot.Project;
         using var key = LoadKey(project);
         using var client = new SshClient(Connection(project, key));
         Pin(client, project.HostFingerprint);
         await log("DEPLOYIT_STAGE=ssh");
-        await log("Подключение к SSH-серверу для перезапуска…");
+        await log(operation == DeploymentOperation.Stop
+            ? "Подключение к SSH-серверу для остановки проекта…" : "Подключение к SSH-серверу для перезапуска…");
         try { await client.ConnectAsync(ct); }
         catch (SshAuthenticationException) { throw AuthenticationError(project); }
-        using var command = client.CreateCommand(BuildRestartCommand(project, runId));
+        using var command = client.CreateCommand(BuildCurrentReleaseCommand(project, runId, operation));
         command.CommandTimeout = TimeSpan.FromMinutes(project.TimeoutMinutes) + TimeSpan.FromSeconds(45);
-        await log("Перезапуск текущего релиза без загрузки кода из репозитория…");
+        await log(operation == DeploymentOperation.Stop
+            ? "Остановка текущего релиза…" : "Перезапуск текущего релиза без загрузки кода из репозитория…");
         var execute = command.ExecuteAsync(ct);
         await Task.WhenAll(execute, ReadAsync(command.OutputStream, log, ct),
             ReadAsync(command.ExtendedOutputStream, line => log("[stderr] " + line), ct));
@@ -156,16 +165,23 @@ public sealed partial class SshDeploymentService(SecretProtector secrets)
     }
 
     public static string BuildRestartCommand(DeploymentProject project, Guid? runId = null)
+        => BuildCurrentReleaseCommand(project, runId ?? Guid.NewGuid(), DeploymentOperation.Restart);
+
+    public static string BuildStopCommand(DeploymentProject project, Guid? runId = null)
+        => BuildCurrentReleaseCommand(project, runId ?? Guid.NewGuid(), DeploymentOperation.Stop);
+
+    private static string BuildCurrentReleaseCommand(DeploymentProject project, Guid runId, DeploymentOperation operation)
     {
+        var stopping = operation == DeploymentOperation.Stop;
         var script = $$"""
-            {{RunPrelude(project, runId ?? Guid.NewGuid())}}
+            {{RunPrelude(project, runId)}}
             root={{Quote(project.WorkingDirectory)}}
             if [ ! -d "$root/current" ]; then
                 printf '%s\n' 'Текущий релиз не найден. Сначала нажмите «Развернуть».' >&2
                 exit 66
             fi
             exec 9>"$root/.deployit.lock"
-            flock -n 9 || { printf '%s\n' 'Другой деплой, перезапуск или сохранение .env ещё выполняется.' >&2; exit 75; }
+            flock -n 9 || { printf '%s\n' 'Другой деплой, перезапуск, остановка или сохранение .env ещё выполняется.' >&2; exit 75; }
             cd -- "$root/current"
             export DEPLOYIT_RELEASE_DIR="$(pwd -P)"
             export DEPLOYIT_PROJECT_DIR="$root"
@@ -174,11 +190,11 @@ public sealed partial class SshDeploymentService(SecretProtector secrets)
             phase=environment; printf 'DEPLOYIT_STAGE=%s\n' "$phase"
             {{EnvironmentLink(project)}}
             if git rev-parse HEAD >/dev/null 2>&1; then printf 'DEPLOYIT_COMMIT=%s\n' "$(git rev-parse HEAD)"; fi
-            phase=restart-command; printf 'DEPLOYIT_STAGE=%s\n' "$phase"
+            phase={{(stopping ? "stop-command" : "restart-command")}}; printf 'DEPLOYIT_STAGE=%s\n' "$phase"
             check_cancel
-            bash -lc {{Quote(project.RestartCommand)}} 9>&-
+            bash -lc {{Quote(stopping ? project.StopCommand : project.RestartCommand)}} 9>&-
             phase=complete; printf 'DEPLOYIT_STAGE=%s\n' "$phase"
-            printf '%s\n' 'Перезапуск завершён успешно.'
+            printf '%s\n' {{Quote(stopping ? "Проект остановлен. Для запуска нажмите «Перезапустить» или «Развернуть»." : "Перезапуск завершён успешно.")}}
             """;
         return $"timeout --signal=TERM --kill-after=15s {project.TimeoutMinutes * 60}s bash --noprofile --norc -c {Quote(script)}";
     }
