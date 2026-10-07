@@ -91,6 +91,13 @@ app.UseAuthorization();
 app.UseRateLimiter();
 app.UseAntiforgery();
 app.Use(async (context, next) => {
+    if ((HttpMethods.IsGet(context.Request.Method) || HttpMethods.IsHead(context.Request.Method))
+        && string.Equals(context.Request.Path.Value?.TrimEnd('/'), "/login", StringComparison.OrdinalIgnoreCase)
+        && context.User.Identity?.IsAuthenticated == true)
+    {
+        context.Response.Redirect(context.Request.PathBase.Add("/").ToString());
+        return;
+    }
     if (context.Request.Path.StartsWithSegments("/swagger") && context.User.Identity?.IsAuthenticated != true)
     { await context.ChallengeAsync(); return; }
     if (context.Request.Path.StartsWithSegments("/api") && !HttpMethods.IsGet(context.Request.Method)
