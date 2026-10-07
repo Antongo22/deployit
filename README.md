@@ -333,3 +333,8 @@ Smoke-тест читает публичный `octocat/Hello-World` с GitHub, 
 [вход по паролю в SSH.NET](https://sshnet.github.io/SSH.NET/api/Renci.SshNet.PasswordAuthenticationMethod.html),
 [GitHub Repositories API](https://docs.github.com/en/rest/repos/repos),
 [GitLab Projects API](https://docs.gitlab.com/api/projects/).
+
+## Лицензия
+
+Проект распространяется под [лицензией MIT](LICENSE).
+Copyright (c) 2026 Antongo22. Сторонние библиотеки сохраняют свои лицензии.

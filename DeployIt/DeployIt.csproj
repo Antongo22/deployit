@@ -4,6 +4,7 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <!-- Docker restores before copying Razor files. Include Blazor framework assets at restore time. -->
     <RequiresAspNetWebAssets>true</RequiresAspNetWebAssets>
   </PropertyGroup>
