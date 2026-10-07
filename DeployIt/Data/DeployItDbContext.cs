@@ -1,5 +1,6 @@
 using DeployIt.Models;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 
 namespace DeployIt.Data;
 
@@ -9,8 +10,34 @@ public sealed class DeployItDbContext(DbContextOptions<DeployItDbContext> option
     public DbSet<DeploymentProject> Projects => Set<DeploymentProject>();
     public DbSet<Deployment> Deployments => Set<Deployment>();
 
+    public async Task InitializeAsync(CancellationToken ct = default)
+    {
+        await Database.EnsureCreatedAsync(ct);
+        await Database.ExecuteSqlRawAsync("PRAGMA journal_mode=WAL;", ct);
+
+        // EnsureCreated doesn't upgrade existing SQLite databases. Add only the new columns,
+        // retaining projects, history and queued snapshots from the key-only version.
+        await Database.OpenConnectionAsync(ct);
+        await using var transaction = await Database.BeginTransactionAsync(ct);
+        var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        await using (var command = Database.GetDbConnection().CreateCommand())
+        {
+            command.Transaction = transaction.GetDbTransaction();
+            command.CommandText = "PRAGMA table_info(\"Projects\");";
+            await using var reader = await command.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct)) columns.Add(reader.GetString(1));
+        }
+        if (!columns.Contains("AuthenticationType"))
+            await Database.ExecuteSqlRawAsync("ALTER TABLE \"Projects\" ADD COLUMN \"AuthenticationType\" INTEGER NOT NULL DEFAULT 0;", ct);
+        if (!columns.Contains("ProtectedPassword"))
+            await Database.ExecuteSqlRawAsync("ALTER TABLE \"Projects\" ADD COLUMN \"ProtectedPassword\" TEXT NOT NULL DEFAULT '';", ct);
+        await transaction.CommitAsync(ct);
+    }
+
     protected override void OnModelCreating(ModelBuilder model)
     {
+        model.Entity<DeploymentProject>().Property(p => p.AuthenticationType).HasDefaultValue(SshAuthenticationType.PrivateKey);
+        model.Entity<DeploymentProject>().Property(p => p.ProtectedPassword).HasDefaultValue("");
         model.Entity<DeploymentProject>().HasIndex(p => p.RepositoryUrl).IsUnique();
         model.Entity<DeploymentProject>().HasIndex(p => new { p.Host, p.Port }).IsUnique();
         model.Entity<DeploymentProject>().HasOne(p => p.Connection).WithMany()

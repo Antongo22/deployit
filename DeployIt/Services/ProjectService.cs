@@ -105,6 +105,8 @@ public sealed class ProjectService(IDbContextFactory<DeployItDbContext> factory,
     {
         Validate(input);
         ValidateServer(input.Host, input.Port);
+        if (!Enum.IsDefined(input.AuthenticationType))
+            throw new DomainException("Выберите способ входа по SSH. Например: «Логин и пароль» для входа с паролем пользователя сервера.");
         if (!Regex.IsMatch(input.Username, "^[a-zA-Z_][a-zA-Z0-9_.-]{0,99}$"))
             throw new DomainException("Некорректное имя SSH-пользователя.");
         if (!Regex.IsMatch(input.HostFingerprint.Trim(), "^SHA256:[A-Za-z0-9+/]{43}$"))
@@ -133,18 +135,32 @@ public sealed class ProjectService(IDbContextFactory<DeployItDbContext> factory,
         if (await db.Projects.AnyAsync(p => p.Id != project.Id && (p.RepositoryUrl == repository.CloneUrl
             || (p.Host == host && p.Port == input.Port)), ct))
             throw new DomainException("Репозиторий или сервер уже привязан к другому проекту (связь 1:1).", 409);
-        if (!string.IsNullOrWhiteSpace(input.PrivateKey))
+        if (input.AuthenticationType == SshAuthenticationType.Password)
         {
-            try
-            {
-                using var key = new PrivateKeyFile(new MemoryStream(System.Text.Encoding.UTF8.GetBytes(input.PrivateKey)),
-                    string.IsNullOrEmpty(input.Passphrase) ? null : input.Passphrase);
-            }
-            catch (Exception) { throw new DomainException("Не удалось прочитать SSH-ключ. Проверьте формат и пароль ключа."); }
-            project.ProtectedPrivateKey = secrets.Protect(input.PrivateKey);
-            project.ProtectedPassphrase = secrets.Protect(input.Passphrase);
+            if (!string.IsNullOrEmpty(input.Password))
+                project.ProtectedPassword = secrets.Protect(input.Password);
+            else if (project.AuthenticationType != SshAuthenticationType.Password || project.ProtectedPassword == "")
+                throw new DomainException("Укажите пароль SSH-пользователя на сервере. Пример: для ssh deploy@app.example.com нужны логин deploy и пароль этого пользователя, а не пароль SSH-ключа. При редактировании пустое поле сохраняет уже заданный пароль.");
+            project.ProtectedPrivateKey = project.ProtectedPassphrase = "";
         }
-        if (project.ProtectedPrivateKey == "") throw new DomainException("Нужен приватный SSH-ключ для доступа к серверу.");
+        else
+        {
+            if (!string.IsNullOrWhiteSpace(input.PrivateKey))
+            {
+                try
+                {
+                    using var key = new PrivateKeyFile(new MemoryStream(System.Text.Encoding.UTF8.GetBytes(input.PrivateKey)),
+                        string.IsNullOrEmpty(input.Passphrase) ? null : input.Passphrase);
+                }
+                catch (Exception) { throw new DomainException("Не удалось прочитать SSH-ключ. Пример начала приватного ключа: -----BEGIN OPENSSH PRIVATE KEY-----. Вставьте весь приватный ключ, а не файл .pub, и укажите его пароль, если он установлен."); }
+                project.ProtectedPrivateKey = secrets.Protect(input.PrivateKey);
+                project.ProtectedPassphrase = secrets.Protect(input.Passphrase);
+            }
+            if (project.ProtectedPrivateKey == "")
+                throw new DomainException("Нужен приватный SSH-ключ. Пример начала: -----BEGIN OPENSSH PRIVATE KEY-----. Для входа с паролем пользователя выберите способ «Логин и пароль».");
+            project.ProtectedPassword = "";
+        }
+        project.AuthenticationType = input.AuthenticationType;
         project.Name = input.Name.Trim(); project.ConnectionId = connection.Id;
         project.RepositoryId = repository.Id; project.RepositoryName = repository.Name;
         project.RepositoryUrl = repository.CloneUrl; project.Branch = input.Branch;
@@ -234,7 +250,7 @@ public sealed class ProjectService(IDbContextFactory<DeployItDbContext> factory,
     private static ConnectionView View(GitConnection c) => new(c.Id, c.Name, c.Provider, c.BaseUrl, c.Account, c.PublicOnly);
     private static ProjectView View(DeploymentProject p, DeploymentView? run, DeploymentView? successful = null) => new(p.Id, p.Name, p.ConnectionId,
         p.RepositoryId, p.RepositoryName, p.RepositoryUrl, p.Branch, p.Host, p.Port, p.Username,
-        p.HostFingerprint, p.WorkingDirectory, p.DeployCommand, p.TimeoutMinutes, run, successful);
+        p.HostFingerprint, p.WorkingDirectory, p.DeployCommand, p.TimeoutMinutes, run, successful, p.AuthenticationType);
     public static DeploymentView View(Deployment d, bool log = false) => new(d.Id, d.ProjectId, d.Status,
         d.CreatedAt, d.StartedAt, d.FinishedAt, d.CommitSha, d.ExitCode, log ? d.Log : null);
 }

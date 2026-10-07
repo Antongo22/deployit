@@ -2,6 +2,7 @@ namespace DeployIt.Models;
 
 public enum GitProvider { GitHub, GitLab }
 public enum DeploymentStatus { Queued, Running, Succeeded, Failed, Interrupted }
+public enum SshAuthenticationType { PrivateKey, Password }
 
 public sealed class GitConnection
 {
@@ -30,6 +31,8 @@ public sealed class DeploymentProject
     public int Port { get; set; } = 22;
     public string Username { get; set; } = "deploy";
     public string HostFingerprint { get; set; } = "";
+    public SshAuthenticationType AuthenticationType { get; set; } = SshAuthenticationType.PrivateKey;
+    public string ProtectedPassword { get; set; } = "";
     public string ProtectedPrivateKey { get; set; } = "";
     public string ProtectedPassphrase { get; set; } = "";
     public string WorkingDirectory { get; set; } = "";

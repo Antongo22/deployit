@@ -29,6 +29,9 @@ public sealed class ProjectInput
     [Range(1, 65535)] public int Port { get; set; } = 22;
     [Required, StringLength(100)] public string Username { get; set; } = "deploy";
     [Required, StringLength(100)] public string HostFingerprint { get; set; } = "";
+    public SshAuthenticationType AuthenticationType { get; set; } = SshAuthenticationType.PrivateKey;
+    [StringLength(1000, ErrorMessage = "Пароль SSH-пользователя должен быть не длиннее 1000 символов. Вставьте только пароль пользователя на сервере, без SSH-ключа.")]
+    public string Password { get; set; } = "";
     [StringLength(20000)] public string PrivateKey { get; set; } = "";
     [StringLength(500)] public string Passphrase { get; set; } = "";
     [Required, StringLength(500)] public string WorkingDirectory { get; set; } = "/opt/deployit/app";
@@ -51,7 +54,8 @@ public sealed record DeploymentView(Guid Id, Guid ProjectId, DeploymentStatus St
 public sealed record ProjectView(Guid Id, string Name, Guid ConnectionId, string RepositoryId,
     string RepositoryName, string RepositoryUrl, string Branch, string Host, int Port, string Username,
     string HostFingerprint, string WorkingDirectory, string DeployCommand, int TimeoutMinutes,
-    DeploymentView? LatestDeployment, DeploymentView? LastSuccessfulDeployment = null);
+    DeploymentView? LatestDeployment, DeploymentView? LastSuccessfulDeployment = null,
+    SshAuthenticationType AuthenticationType = SshAuthenticationType.PrivateKey);
 
 public sealed class DomainException(string message, int statusCode = 400) : Exception(message)
 {

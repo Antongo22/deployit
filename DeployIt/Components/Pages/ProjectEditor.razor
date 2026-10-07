@@ -23,12 +23,21 @@ else
         </section>
         <section class="panel"><div class="step"><span>02</span><h2>SSH-сервер</h2></div>
             <div class="fields-row host-port"><label>Адрес сервера<InputText @bind-Value="input.Host" placeholder="192.0.2.10 или app.example.com" /></label><label>Порт<InputNumber @bind-Value="input.Port" /></label></div>
+            <label>Способ входа по SSH<InputSelect @bind-Value="input.AuthenticationType" @bind-Value:after="AuthenticationChanged"><option value="@SshAuthenticationType.PrivateKey">SSH-ключ</option><option value="@SshAuthenticationType.Password">Логин и пароль</option></InputSelect></label>
             <label>SSH-пользователь<InputText @bind-Value="input.Username" placeholder="deploy" /></label>
+            @if (input.AuthenticationType == SshAuthenticationType.Password)
+            {
+                <label>Пароль SSH-пользователя<InputText type="password" @bind-Value="input.Password" autocomplete="new-password" /><small>@(HasSavedCredentials ? "Пароль сохранён и не показывается. Оставьте поле пустым, чтобы сохранить его, или введите новый пароль." : "Пароль этого пользователя на сервере. Например, для ssh deploy@app.example.com укажите логин deploy и его пароль на сервере.")</small></label>
+                <p class="form-note">Вход по паролю должен быть разрешён на SSH-сервере. Пароль хранится в зашифрованном виде.</p>
+            }
             <label>Отпечаток SSH-ключа сервера<InputText class="mono" @bind-Value="input.HostFingerprint" placeholder="SHA256:…" /></label>
             <button class="button subtle" type="button" disabled="@(busy || probing)" @onclick="Probe">@(probing ? "Подключаемся…" : "Получить отпечаток")</button>
             <p class="form-note">Перед сохранением сверьте отпечаток с сервером: <code>ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub</code>. При его изменении соединение будет отклонено.</p>
-            <label>Приватный SSH-ключ<InputTextArea class="mono" @bind-Value="input.PrivateKey" rows="5" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" /><small>@(Id.HasValue ? "Оставьте пустым, чтобы сохранить текущий ключ. Новый ключ заменяет его вместе с паролем." : "Публичная часть ключа должна находиться в authorized_keys пользователя на сервере.")</small></label>
-            <label>Пароль SSH-ключа, если установлен<InputText type="password" @bind-Value="input.Passphrase" autocomplete="off" /></label>
+            @if (input.AuthenticationType == SshAuthenticationType.PrivateKey)
+            {
+                <label>Приватный SSH-ключ<InputTextArea class="mono" @bind-Value="input.PrivateKey" rows="5" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" /><small>@(HasSavedCredentials ? "Оставьте пустым, чтобы сохранить текущий ключ. Новый ключ заменяет его вместе с паролем." : "Публичная часть ключа должна находиться в authorized_keys пользователя на сервере.")</small></label>
+                <label>Пароль SSH-ключа, если установлен<InputText type="password" @bind-Value="input.Passphrase" autocomplete="off" /></label>
+            }
         </section>
         <section class="panel deploy-config"><div class="step"><span>03</span><h2>Как разворачиваем?</h2></div>
             <div class="fields-row"><label>Корневой каталог на сервере<InputText class="mono" @bind-Value="input.WorkingDirectory" /><small>Код попадает в releases/&lt;id&gt;. После успеха обновляется ссылка current.</small></label><label>Таймаут, минут<InputNumber @bind-Value="input.TimeoutMinutes" min="1" max="120" /></label></div>
@@ -46,14 +55,18 @@ else
     private List<RepositoryView> repositories = [];
     private bool busy, probing, repositoriesLoading, loading = true;
     private string? error;
+    private SshAuthenticationType? savedAuthenticationType;
+    private bool HasSavedCredentials => Id.HasValue && savedAuthenticationType == input.AuthenticationType;
     protected override async Task OnParametersSetAsync() {
-        loading = true; error = null;
+        loading = true; error = null; savedAuthenticationType = null;
         try {
             connections = await Service.ConnectionsAsync();
             if (Id.HasValue) {
                 var p = await Service.ProjectAsync(Id.Value);
+                savedAuthenticationType = p.AuthenticationType;
                 input = new() { Name = p.Name, ConnectionId = p.ConnectionId, RepositoryId = p.RepositoryId,
                     Branch = p.Branch, Host = p.Host, Port = p.Port, Username = p.Username,
+                    AuthenticationType = p.AuthenticationType,
                     HostFingerprint = p.HostFingerprint, WorkingDirectory = p.WorkingDirectory,
                     DeployCommand = p.DeployCommand, TimeoutMinutes = p.TimeoutMinutes };
             } else { input = new(); if (connections.Count > 0) input.ConnectionId = connections[0].Id; }
@@ -65,6 +78,7 @@ else
         catch (Exception e) { repositories = []; error = Ui.Error(e); } finally { repositoriesLoading = false; }
     }
     private async Task ConnectionChanged() { input.RepositoryId = ""; error = null; await LoadRepositories(); }
+    private void AuthenticationChanged() { input.Password = input.PrivateKey = input.Passphrase = ""; error = null; }
     private void RepositoryChanged() { var repository = repositories.FirstOrDefault(r => r.Id == input.RepositoryId);
         if (repository is not null) { input.Branch = repository.DefaultBranch; if (string.IsNullOrWhiteSpace(input.Name)) input.Name = repository.Name.Split('/').Last(); }
     }
@@ -73,7 +87,7 @@ else
         catch (Exception e) { error = Ui.Error(e); } finally { probing = false; }
     }
     private async Task Save() { busy = true; error = null;
-        try { var project = await Service.SaveProjectAsync(input, Id); input.PrivateKey = input.Passphrase = ""; Navigation.NavigateTo($"/projects/{project.Id}"); }
+        try { var project = await Service.SaveProjectAsync(input, Id); input.Password = input.PrivateKey = input.Passphrase = ""; Navigation.NavigateTo($"/projects/{project.Id}"); }
         catch (Exception e) { error = Ui.Error(e); } finally { busy = false; }
     }
 }

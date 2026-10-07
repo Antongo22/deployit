@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using DeployIt.Data;
+using DeployIt.DTOs;
 using DeployIt.Models;
 using Microsoft.EntityFrameworkCore;
 
@@ -79,6 +80,9 @@ public sealed class DeploymentWorker(IDbContextFactory<DeployItDbContext> factor
             sensitive.Add(secrets.Unprotect(snapshot.Connection.ProtectedToken));
             sensitive.AddRange(secrets.Unprotect(snapshot.Project.ProtectedPrivateKey).Split('\n').Select(line => line.Trim()).Where(line => line.Length > 10));
             sensitive.Add(secrets.Unprotect(snapshot.Project.ProtectedPassphrase));
+            var password = secrets.Unprotect(snapshot.Project.ProtectedPassword);
+            sensitive.Add(password);
+            sensitive.AddRange(password.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries));
             exit = await ssh.DeployAsync(snapshot, deployment.Id, Append, ct);
             status = exit == 0 ? DeploymentStatus.Succeeded : DeploymentStatus.Failed;
             await Append(exit == 0 ? "Готово." : exit is 124 or 137
@@ -89,9 +93,13 @@ public sealed class DeploymentWorker(IDbContextFactory<DeployItDbContext> factor
             status = DeploymentStatus.Interrupted;
             await Append("Панель остановлена. Удалённая команда может продолжаться до таймаута; проверьте сервер.");
         }
+        catch (DomainException e)
+        {
+            await Append(e.Message);
+        }
         catch (Exception e)
         {
-            await Append($"Не удалось выполнить деплой ({e.GetType().Name}). Проверьте доступ к Git, SSH-ключ, отпечаток и журнал сервера.");
+            await Append($"Не удалось выполнить деплой ({e.GetType().Name}). Проверьте доступ к Git, SSH-пользователя, ключ или пароль, отпечаток и журнал сервера.");
         }
         await using var finish = await factory.CreateDbContextAsync();
         await finish.Deployments.Where(d => d.Id == deployment.Id).ExecuteUpdateAsync(u => u

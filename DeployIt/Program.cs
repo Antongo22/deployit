@@ -74,8 +74,7 @@ builder.Services.AddRateLimiter(options => {
 var app = builder.Build();
 await using (var db = await app.Services.GetRequiredService<IDbContextFactory<DeployItDbContext>>().CreateDbContextAsync())
 {
-    await db.Database.EnsureCreatedAsync();
-    await db.Database.ExecuteSqlRawAsync("PRAGMA journal_mode=WAL;");
+    await db.InitializeAsync();
 }
 app.UseExceptionHandler(handler => handler.Run(async context => {
     var error = context.Features.Get<IExceptionHandlerFeature>()?.Error;

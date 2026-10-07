@@ -2,6 +2,7 @@ using System.Text;
 using DeployIt.DTOs;
 using DeployIt.Models;
 using Renci.SshNet;
+using Renci.SshNet.Common;
 using ConnectionInfo = Renci.SshNet.ConnectionInfo;
 
 namespace DeployIt.Services;
@@ -36,8 +37,9 @@ public sealed class SshDeploymentService(SecretProtector secrets)
             return "SSH подключён. Git, bash, timeout и flock доступны.";
         }
         catch (DomainException) { throw; }
+        catch (SshAuthenticationException) { throw AuthenticationError(project); }
         catch (Exception) when (!ct.IsCancellationRequested)
-        { throw new DomainException("SSH-проверка не прошла. Проверьте пользователя, ключ и отпечаток сервера."); }
+        { throw new DomainException("SSH-проверка не прошла. Проверьте адрес, порт, способ входа и отпечаток сервера. Пример подключения: ssh -p 22 deploy@app.example.com."); }
     }
 
     public async Task<int> DeployAsync(DeploymentSnapshot snapshot, Guid runId,
@@ -48,7 +50,8 @@ public sealed class SshDeploymentService(SecretProtector secrets)
         using var client = new SshClient(Connection(project, key));
         Pin(client, project.HostFingerprint);
         await log("Подключение к SSH-серверу…");
-        await client.ConnectAsync(ct);
+        try { await client.ConnectAsync(ct); }
+        catch (SshAuthenticationException) { throw AuthenticationError(project); }
         var credentialsDirectory = "/tmp/deployit-" + runId.ToString("N");
         var token = snapshot.Connection.PublicOnly ? "" : secrets.Unprotect(snapshot.Connection.ProtectedToken);
         try
@@ -122,11 +125,22 @@ public sealed class SshDeploymentService(SecretProtector secrets)
         return $"timeout --signal=TERM --kill-after=15s {project.TimeoutMinutes * 60}s bash -lc {Quote(script)}";
     }
 
-    private PrivateKeyFile LoadKey(DeploymentProject project) => new(
+    private PrivateKeyFile? LoadKey(DeploymentProject project) => project.AuthenticationType == SshAuthenticationType.PrivateKey ? new(
         new MemoryStream(Encoding.UTF8.GetBytes(secrets.Unprotect(project.ProtectedPrivateKey))),
-        string.IsNullOrEmpty(project.ProtectedPassphrase) ? null : secrets.Unprotect(project.ProtectedPassphrase));
-    private static ConnectionInfo Connection(DeploymentProject p, PrivateKeyFile key) => new(p.Host, p.Port,
-        p.Username, new PrivateKeyAuthenticationMethod(p.Username, key)) { Timeout = TimeSpan.FromSeconds(15) };
+        string.IsNullOrEmpty(project.ProtectedPassphrase) ? null : secrets.Unprotect(project.ProtectedPassphrase)) : null;
+    private ConnectionInfo Connection(DeploymentProject p, PrivateKeyFile? key)
+    {
+        AuthenticationMethod authentication = p.AuthenticationType switch {
+            SshAuthenticationType.Password => new PasswordAuthenticationMethod(p.Username, secrets.Unprotect(p.ProtectedPassword)),
+            SshAuthenticationType.PrivateKey when key is not null => new PrivateKeyAuthenticationMethod(p.Username, key),
+            _ => throw new DomainException("Не настроен способ входа по SSH. В настройках проекта выберите «SSH-ключ» или «Логин и пароль» и заполните соответствующие поля.")
+        };
+        return new ConnectionInfo(p.Host, p.Port, p.Username, authentication) { Timeout = TimeSpan.FromSeconds(15) };
+    }
+    private static DomainException AuthenticationError(DeploymentProject project) => new(
+        project.AuthenticationType == SshAuthenticationType.Password
+            ? "SSH-сервер отклонил вход по паролю. Проверьте логин и пароль пользователя; на сервере должен быть разрешён вход по паролю. Пример: для ssh deploy@app.example.com укажите SSH-пользователя deploy и его пароль на сервере."
+            : "SSH-сервер отклонил вход по ключу. Проверьте SSH-пользователя и ключ. Например, для пользователя deploy публичная часть ключа должна находиться в /home/deploy/.ssh/authorized_keys.");
     private static void Pin(BaseClient client, string fingerprint) => client.HostKeyReceived += (_, e) =>
         e.CanTrust = "SHA256:" + e.FingerPrintSHA256 == fingerprint;
     private static void Upload(SftpClient client, string path, string content, short mode)
