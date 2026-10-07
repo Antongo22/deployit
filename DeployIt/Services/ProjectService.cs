@@ -74,7 +74,7 @@ public sealed class ProjectService(IDbContextFactory<DeployItDbContext> factory,
         var projects = await db.Projects.AsNoTracking().OrderBy(p => p.Name).ToListAsync(ct);
         var runs = await db.Deployments.AsNoTracking().OrderByDescending(d => d.CreatedAt)
             .Select(d => new DeploymentView(d.Id, d.ProjectId, d.Status, d.CreatedAt, d.StartedAt, d.FinishedAt,
-                d.CommitSha, d.ExitCode, null)).ToListAsync(ct);
+                d.CommitSha, d.ExitCode, null, d.Operation)).ToListAsync(ct);
         return projects.Select(p => View(p, runs.FirstOrDefault(d => d.ProjectId == p.Id), runs.FirstOrDefault(d => d.ProjectId == p.Id && d.Status == DeploymentStatus.Succeeded))).ToList();
     }
 
@@ -86,11 +86,11 @@ public sealed class ProjectService(IDbContextFactory<DeployItDbContext> factory,
         var latest = await db.Deployments.AsNoTracking().Where(d => d.ProjectId == id)
             .OrderByDescending(d => d.CreatedAt)
             .Select(d => new DeploymentView(d.Id, d.ProjectId, d.Status, d.CreatedAt, d.StartedAt, d.FinishedAt,
-                d.CommitSha, d.ExitCode, null)).FirstOrDefaultAsync(ct);
+                d.CommitSha, d.ExitCode, null, d.Operation)).FirstOrDefaultAsync(ct);
         var successful = await db.Deployments.AsNoTracking().Where(d => d.ProjectId == id && d.Status == DeploymentStatus.Succeeded)
             .OrderByDescending(d => d.CreatedAt)
             .Select(d => new DeploymentView(d.Id, d.ProjectId, d.Status, d.CreatedAt, d.StartedAt, d.FinishedAt,
-                d.CommitSha, d.ExitCode, null)).FirstOrDefaultAsync(ct);
+                d.CommitSha, d.ExitCode, null, d.Operation)).FirstOrDefaultAsync(ct);
         return View(project, latest, successful);
     }
 
@@ -120,6 +120,8 @@ public sealed class ProjectService(IDbContextFactory<DeployItDbContext> factory,
             throw new DomainException("Укажите абсолютный отдельный каталог проекта, например /opt/apps/my-app.");
         if (string.IsNullOrWhiteSpace(input.DeployCommand) || input.DeployCommand.Contains('\0'))
             throw new DomainException("Укажите команду деплоя.");
+        if (string.IsNullOrWhiteSpace(input.RestartCommand) || input.RestartCommand.Contains('\0'))
+            throw new DomainException("Укажите команду перезапуска. Пример для Compose: docker compose up -d --force-recreate --no-build.");
 
         await using var db = await factory.CreateDbContextAsync(ct);
         var project = id.HasValue
@@ -167,7 +169,8 @@ public sealed class ProjectService(IDbContextFactory<DeployItDbContext> factory,
         project.Host = host; project.Port = input.Port; project.Username = input.Username;
         project.HostFingerprint = input.HostFingerprint.Trim();
         project.WorkingDirectory = input.WorkingDirectory.TrimEnd('/');
-        project.DeployCommand = input.DeployCommand; project.TimeoutMinutes = input.TimeoutMinutes;
+        project.DeployCommand = input.DeployCommand; project.RestartCommand = input.RestartCommand;
+        project.TimeoutMinutes = input.TimeoutMinutes;
         if (!id.HasValue) db.Projects.Add(project);
         try { await db.SaveChangesAsync(ct); }
         catch (DbUpdateException) { throw new DomainException("Репозиторий или сервер уже занят другим проектом.", 409); }
@@ -197,15 +200,22 @@ public sealed class ProjectService(IDbContextFactory<DeployItDbContext> factory,
         try { return await EnqueueCoreAsync(projectId, ct); }
         finally { mutationGate.Release(); }
     }
-    private async Task<DeploymentView> EnqueueCoreAsync(Guid projectId, CancellationToken ct)
+    public async Task<DeploymentView> EnqueueRestartAsync(Guid projectId, CancellationToken ct = default)
+    {
+        await mutationGate.WaitAsync(ct);
+        try { return await EnqueueCoreAsync(projectId, ct, DeploymentOperation.Restart); }
+        finally { mutationGate.Release(); }
+    }
+    private async Task<DeploymentView> EnqueueCoreAsync(Guid projectId, CancellationToken ct,
+        DeploymentOperation operation = DeploymentOperation.Deploy)
     {
         await using var db = await factory.CreateDbContextAsync(ct);
         var project = await db.Projects.AsNoTracking().Include(p => p.Connection).FirstOrDefaultAsync(p => p.Id == projectId, ct)
             ?? throw new DomainException("Проект не найден.", 404);
         if (await db.Deployments.AnyAsync(d => d.ProjectId == projectId &&
             (d.Status == DeploymentStatus.Queued || d.Status == DeploymentStatus.Running), ct))
-            throw new DomainException("Деплой этого проекта уже в очереди или выполняется.", 409);
-        var run = new Deployment { ProjectId = projectId,
+            throw new DomainException("Деплой или перезапуск этого проекта уже в очереди или выполняется. Дождитесь завершения.", 409);
+        var run = new Deployment { ProjectId = projectId, Operation = operation,
             ProtectedSnapshot = secrets.Protect(JsonSerializer.Serialize(new DeploymentSnapshot(project, project.Connection))) };
         db.Deployments.Add(run);
         try { await db.SaveChangesAsync(ct); }
@@ -219,7 +229,7 @@ public sealed class ProjectService(IDbContextFactory<DeployItDbContext> factory,
         return await db.Deployments.AsNoTracking().Where(d => d.ProjectId == id)
             .OrderByDescending(d => d.CreatedAt).Take(100)
             .Select(d => new DeploymentView(d.Id, d.ProjectId, d.Status, d.CreatedAt, d.StartedAt, d.FinishedAt,
-                d.CommitSha, d.ExitCode, null)).ToListAsync(ct);
+                d.CommitSha, d.ExitCode, null, d.Operation)).ToListAsync(ct);
     }
 
     public async Task<DeploymentView> DeploymentAsync(Guid id, CancellationToken ct = default)
@@ -250,7 +260,7 @@ public sealed class ProjectService(IDbContextFactory<DeployItDbContext> factory,
     private static ConnectionView View(GitConnection c) => new(c.Id, c.Name, c.Provider, c.BaseUrl, c.Account, c.PublicOnly);
     private static ProjectView View(DeploymentProject p, DeploymentView? run, DeploymentView? successful = null) => new(p.Id, p.Name, p.ConnectionId,
         p.RepositoryId, p.RepositoryName, p.RepositoryUrl, p.Branch, p.Host, p.Port, p.Username,
-        p.HostFingerprint, p.WorkingDirectory, p.DeployCommand, p.TimeoutMinutes, run, successful, p.AuthenticationType);
+        p.HostFingerprint, p.WorkingDirectory, p.DeployCommand, p.TimeoutMinutes, run, successful, p.AuthenticationType, p.RestartCommand);
     public static DeploymentView View(Deployment d, bool log = false) => new(d.Id, d.ProjectId, d.Status,
-        d.CreatedAt, d.StartedAt, d.FinishedAt, d.CommitSha, d.ExitCode, log ? d.Log : null);
+        d.CreatedAt, d.StartedAt, d.FinishedAt, d.CommitSha, d.ExitCode, log ? d.Log : null, d.Operation);
 }

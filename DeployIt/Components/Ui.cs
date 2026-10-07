@@ -6,6 +6,7 @@ namespace DeployIt.Components;
 public static class Ui
 {
     public static bool Active(DeploymentStatus? status) => status is DeploymentStatus.Queued or DeploymentStatus.Running;
+    public static string Operation(DeploymentOperation operation) => operation == DeploymentOperation.Restart ? "Перезапуск" : "Деплой";
     public static string Status(DeploymentStatus? status) => status switch {
         DeploymentStatus.Queued => "В очереди", DeploymentStatus.Running => "Выполняется",
         DeploymentStatus.Succeeded => "Успешно", DeploymentStatus.Failed => "Ошибка",

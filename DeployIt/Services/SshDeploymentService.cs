@@ -7,7 +7,7 @@ using ConnectionInfo = Renci.SshNet.ConnectionInfo;
 
 namespace DeployIt.Services;
 
-public sealed class SshDeploymentService(SecretProtector secrets)
+public sealed partial class SshDeploymentService(SecretProtector secrets)
 {
     public async Task<string> ProbeAsync(string host, int port, CancellationToken ct = default)
     {
@@ -62,11 +62,12 @@ public sealed class SshDeploymentService(SecretProtector secrets)
                 Pin(sftp, project.HostFingerprint);
                 await sftp.ConnectAsync(ct);
                 sftp.CreateDirectory(credentialsDirectory);
-                sftp.ChangePermissions(credentialsDirectory, 448); // 0700
-                Upload(sftp, credentialsDirectory + "/token", token, 384); // 0600
+                // SSH.NET expects octal digits (700), not a decimal bit mask (448).
+                sftp.ChangePermissions(credentialsDirectory, 700);
+                Upload(sftp, credentialsDirectory + "/token", token, 600);
                 var gitUsername = snapshot.Connection.Provider == GitProvider.GitHub ? snapshot.Connection.Account : "oauth2";
                 Upload(sftp, credentialsDirectory + "/askpass", "#!/bin/sh\ncase \"$1\" in\n*Username*) printf '%s' " + Quote(gitUsername) + " ;;\n*) cat "
-                    + Quote(credentialsDirectory + "/token") + " ;;\nesac\n", 448);
+                    + Quote(credentialsDirectory + "/token") + " ;;\nesac\n", 700);
             }
             using var command = client.CreateCommand(BuildCommand(project, runId, token != ""));
             command.CommandTimeout = TimeSpan.FromMinutes(project.TimeoutMinutes) + TimeSpan.FromSeconds(45);
@@ -113,8 +114,10 @@ public sealed class SshDeploymentService(SecretProtector secrets)
             LC_ALL=C git -c credential.helper= -c http.followRedirects=false clone --depth 1 --branch {{Quote(project.Branch)}} -- {{Quote(project.RepositoryUrl)}} {{Quote(release)}} 9>&-
             cd -- {{Quote(release)}}
             printf 'DEPLOYIT_COMMIT=%s\n' "$(git rev-parse HEAD)"
+            {{EnvironmentLink(project)}}
             export DEPLOYIT_RELEASE_DIR={{Quote(release)}}
             export DEPLOYIT_PROJECT_DIR={{Quote(project.WorkingDirectory)}}
+            export DEPLOYIT_ENV_FILE={{Quote(project.WorkingDirectory + "/.env")}}
             export COMPOSE_PROJECT_NAME=deployit-{{project.Id:N}}
             printf '%s\n' 'Выполнение команды деплоя…'
             bash -lc {{Quote(project.DeployCommand)}} 9>&-
@@ -124,6 +127,52 @@ public sealed class SshDeploymentService(SecretProtector secrets)
             """;
         return $"timeout --signal=TERM --kill-after=15s {project.TimeoutMinutes * 60}s bash -lc {Quote(script)}";
     }
+
+    public async Task<int> RestartAsync(DeploymentSnapshot snapshot, Func<string, Task> log, CancellationToken ct)
+    {
+        var project = snapshot.Project;
+        using var key = LoadKey(project);
+        using var client = new SshClient(Connection(project, key));
+        Pin(client, project.HostFingerprint);
+        await log("Подключение к SSH-серверу для перезапуска…");
+        try { await client.ConnectAsync(ct); }
+        catch (SshAuthenticationException) { throw AuthenticationError(project); }
+        using var command = client.CreateCommand(BuildRestartCommand(project));
+        command.CommandTimeout = TimeSpan.FromMinutes(project.TimeoutMinutes) + TimeSpan.FromSeconds(45);
+        await log("Перезапуск текущего релиза без загрузки кода из репозитория…");
+        var execute = command.ExecuteAsync(ct);
+        await Task.WhenAll(execute, ReadAsync(command.OutputStream, log, ct),
+            ReadAsync(command.ExtendedOutputStream, line => log("[stderr] " + line), ct));
+        return command.ExitStatus ?? -1;
+    }
+
+    public static string BuildRestartCommand(DeploymentProject project)
+    {
+        var script = $$"""
+            set -euo pipefail
+            umask 077
+            root={{Quote(project.WorkingDirectory)}}
+            if [ ! -d "$root/current" ]; then
+                printf '%s\n' 'Текущий релиз не найден. Сначала нажмите «Развернуть».' >&2
+                exit 66
+            fi
+            exec 9>"$root/.deployit.lock"
+            flock -n 9 || { printf '%s\n' 'Другой деплой, перезапуск или сохранение .env ещё выполняется.' >&2; exit 75; }
+            cd -- "$root/current"
+            export DEPLOYIT_RELEASE_DIR="$(pwd -P)"
+            export DEPLOYIT_PROJECT_DIR="$root"
+            export DEPLOYIT_ENV_FILE="$root/.env"
+            export COMPOSE_PROJECT_NAME=deployit-{{project.Id:N}}
+            {{EnvironmentLink(project)}}
+            if git rev-parse HEAD >/dev/null 2>&1; then printf 'DEPLOYIT_COMMIT=%s\n' "$(git rev-parse HEAD)"; fi
+            bash -lc {{Quote(project.RestartCommand)}} 9>&-
+            printf '%s\n' 'Перезапуск завершён успешно.'
+            """;
+        return $"timeout --signal=TERM --kill-after=15s {project.TimeoutMinutes * 60}s bash -lc {Quote(script)}";
+    }
+
+    private static string EnvironmentLink(DeploymentProject project) =>
+        $"if [ -f {Quote(project.WorkingDirectory + "/.env")} ]; then ln -sfnT -- {Quote(project.WorkingDirectory + "/.env")} .env; fi";
 
     private PrivateKeyFile? LoadKey(DeploymentProject project) => project.AuthenticationType == SshAuthenticationType.PrivateKey ? new(
         new MemoryStream(Encoding.UTF8.GetBytes(secrets.Unprotect(project.ProtectedPrivateKey))),

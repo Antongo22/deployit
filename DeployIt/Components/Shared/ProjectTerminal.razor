@@ -1,0 +1,55 @@
+@implements IAsyncDisposable
+@using Microsoft.JSInterop
+@inject IJSRuntime JS
+
+<section class="panel ssh-terminal-panel">
+    <div class="section-heading"><div><h2>SSH-терминал</h2><small class="muted">Интерактивная сессия на сервере проекта</small></div><button class="button" @onclick="Toggle">@(opened ? "Отключить и свернуть" : "Открыть SSH-терминал")</button></div>
+    <p class="form-note">Используются сохранённые SSH-настройки. Доступны команды, Ctrl+C, стрелки и интерактивные программы. При закрытии терминала SSH-сессия завершается.</p>
+    <p class="form-note">Редактировать общий файл окружения из терминала: <code>nano "$DEPLOYIT_ENV_FILE"</code> (если nano установлен).</p>
+    @if (error is not null) { <div class="alert error" role="alert">@error</div> }
+    @if (opened) { <div class="browser-terminal" @ref="host"></div> }
+</section>
+
+@code {
+    [Parameter] public Guid ProjectId { get; set; }
+    private bool opened, initialize, disposed;
+    private string? error;
+    private ElementReference host;
+    private IJSObjectReference? module, session;
+    private async Task Toggle()
+    {
+        error = null;
+        if (opened) { await Close(); opened = false; }
+        else { opened = initialize = true; }
+    }
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!initialize || disposed) return;
+        initialize = false;
+        try
+        {
+            module ??= await JS.InvokeAsync<IJSObjectReference>("import", "./" + Assets["project-terminal.js"]);
+            session = await module.InvokeAsync<IJSObjectReference>("create", host, ProjectId.ToString());
+            if (disposed || !opened) await Close();
+        }
+        catch (JSDisconnectedException) { }
+        catch (Exception)
+        {
+            if (!disposed) { error = "Не удалось открыть терминал. Обновите страницу и попробуйте снова."; await InvokeAsync(StateHasChanged); }
+        }
+    }
+    private async Task Close()
+    {
+        var current = session; session = null;
+        if (current is null) return;
+        try { await current.InvokeVoidAsync("dispose"); await current.DisposeAsync(); }
+        catch (JSDisconnectedException) { }
+        catch (ObjectDisposedException) { }
+    }
+    public async ValueTask DisposeAsync()
+    {
+        disposed = true;
+        await Close();
+        if (module is not null) { try { await module.DisposeAsync(); } catch (JSDisconnectedException) { } }
+    }
+}

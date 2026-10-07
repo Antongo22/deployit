@@ -31,6 +31,18 @@ public sealed class DeployItDbContext(DbContextOptions<DeployItDbContext> option
             await Database.ExecuteSqlRawAsync("ALTER TABLE \"Projects\" ADD COLUMN \"AuthenticationType\" INTEGER NOT NULL DEFAULT 0;", ct);
         if (!columns.Contains("ProtectedPassword"))
             await Database.ExecuteSqlRawAsync("ALTER TABLE \"Projects\" ADD COLUMN \"ProtectedPassword\" TEXT NOT NULL DEFAULT '';", ct);
+        if (!columns.Contains("RestartCommand"))
+            await Database.ExecuteSqlRawAsync("ALTER TABLE \"Projects\" ADD COLUMN \"RestartCommand\" TEXT NOT NULL DEFAULT 'docker compose up -d --force-recreate --no-build';", ct);
+        await using (var command = Database.GetDbConnection().CreateCommand())
+        {
+            command.Transaction = transaction.GetDbTransaction();
+            command.CommandText = "PRAGMA table_info(\"Deployments\");";
+            await using var reader = await command.ExecuteReaderAsync(ct);
+            columns.Clear();
+            while (await reader.ReadAsync(ct)) columns.Add(reader.GetString(1));
+        }
+        if (!columns.Contains("Operation"))
+            await Database.ExecuteSqlRawAsync("ALTER TABLE \"Deployments\" ADD COLUMN \"Operation\" INTEGER NOT NULL DEFAULT 0;", ct);
         await transaction.CommitAsync(ct);
     }
 
@@ -38,6 +50,8 @@ public sealed class DeployItDbContext(DbContextOptions<DeployItDbContext> option
     {
         model.Entity<DeploymentProject>().Property(p => p.AuthenticationType).HasDefaultValue(SshAuthenticationType.PrivateKey);
         model.Entity<DeploymentProject>().Property(p => p.ProtectedPassword).HasDefaultValue("");
+        model.Entity<DeploymentProject>().Property(p => p.RestartCommand).HasDefaultValue("docker compose up -d --force-recreate --no-build");
+        model.Entity<Deployment>().Property(d => d.Operation).HasDefaultValue(DeploymentOperation.Deploy);
         model.Entity<DeploymentProject>().HasIndex(p => p.RepositoryUrl).IsUnique();
         model.Entity<DeploymentProject>().HasIndex(p => new { p.Host, p.Port }).IsUnique();
         model.Entity<DeploymentProject>().HasOne(p => p.Connection).WithMany()

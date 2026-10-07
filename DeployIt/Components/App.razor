@@ -5,6 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <base href="/" />
     <link rel="stylesheet" href="@Assets["app.css"]" />
+    <link rel="stylesheet" href="@Assets["lib/xterm/xterm.css"]" />
+    <link rel="stylesheet" href="@Assets["project-tools.css"]" />
     <link rel="icon" href="@Assets["favicon.svg"]" type="image/svg+xml" />
     <ImportMap />
     <HeadOutlet @rendermode="PageRenderMode" />
@@ -12,6 +14,8 @@
 <body>
     <Routes @rendermode="PageRenderMode" />
     <div id="blazor-error-ui">Соединение с панелью прервано. <a href="">Обновить страницу</a></div>
+    <script src="@Assets["lib/xterm/xterm.js"]"></script>
+    <script src="@Assets["lib/xterm/addon-fit.js"]"></script>
     <script src="@Assets["_framework/blazor.web.js"]"></script>
 </body>
 </html>

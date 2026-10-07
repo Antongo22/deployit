@@ -1,0 +1,106 @@
+@implements IDisposable
+@inject ProjectService Projects
+@inject SshDeploymentService Ssh
+
+<section class="panel environment-panel">
+    <div class="section-heading"><div><h2>Переменные окружения · .env</h2><small class="muted mono">@WorkingDirectory/.env</small></div><button class="button" @onclick="Toggle">@(opened ? "Свернуть" : "Редактировать .env")</button></div>
+    <p class="form-note">Файл хранится на сервере и используется текущим и новыми релизами. После сохранения нажмите «Перезапустить», чтобы приложение применило изменения.</p>
+    @if (opened)
+    {
+        @if (error is not null) { <div class="alert error" role="alert">@error</div> }
+        @if (message is not null) { <div class="alert success" role="status">@message</div> }
+        @if (remoteChanged) { <div class="alert warning">.env изменился на сервере. Ваш несохранённый текст остаётся в редакторе. Загрузите серверную версию и объедините изменения.</div> }
+        @if (loaded is not null)
+        {
+            <div class="env-sync-status"><span class="tag">@(Dirty ? "Есть несохранённые изменения" : loaded.Exists ? "Синхронизирован с сервером" : "Файл ещё не создан")</span><small class="muted">Последняя синхронизация: @Ui.Time(syncedAt) МСК</small></div>
+            <label for="project-env">Содержимое .env</label>
+            <textarea id="project-env" class="mono env-editor" @bind="draft" @bind:event="oninput" rows="12" maxlength="32768" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="@("APP_ENV=production\nPORT=8080\n# Комментарии и пустые строки сохраняются")" disabled="@busy"></textarea>
+            <small class="muted">UTF-8, до 32 768 символов. Неизменённый файл проверяется каждые 10 секунд; введённый текст автоматически не перезаписывается.</small>
+        }
+        else if (busy) { <p class="muted">Загружаем .env через SFTP…</p> }
+        <div class="inline-actions env-actions">
+            <button class="button primary" disabled="@(busy || syncing || loaded is null || (!Dirty && loaded.Exists))" @onclick="Save">@(busy ? "Синхронизация…" : "Сохранить на сервер")</button>
+            <button class="button" disabled="@(busy || syncing)" @onclick="Reload">Загрузить с сервера</button>
+        </div>
+        @if (confirmReload)
+        {
+            <div class="alert warning">Заменить несохранённый текст версией с сервера?
+                <div class="inline-actions"><button class="button" @onclick="Load">Да, загрузить серверную версию</button><button class="button subtle" @onclick="() => confirmReload = false">Продолжить редактирование</button></div>
+            </div>
+        }
+    }
+</section>
+
+@code {
+    [Parameter] public Guid ProjectId { get; set; }
+    [Parameter] public string WorkingDirectory { get; set; } = "";
+    private bool opened, busy, syncing, remoteChanged, confirmReload;
+    private string draft = "";
+    private string? error, message;
+    private EnvironmentFileView? loaded;
+    private DateTimeOffset? syncedAt;
+    private readonly CancellationTokenSource lifetime = new();
+    private bool Dirty => loaded is not null && draft != loaded.Content;
+
+    protected override void OnInitialized() { _ = Poll(); }
+    private async Task Toggle()
+    {
+        opened = !opened;
+        if (opened && !Dirty) await Load();
+    }
+    private async Task Reload() { if (Dirty) confirmReload = true; else await Load(); }
+    private async Task Load()
+    {
+        if (busy || syncing) return;
+        busy = true; error = message = null;
+        try
+        {
+            var current = await Ssh.ReadEnvironmentAsync(await Projects.GetTargetAsync(ProjectId, lifetime.Token), lifetime.Token);
+            loaded = current; draft = current.Content; syncedAt = DateTimeOffset.UtcNow;
+            remoteChanged = confirmReload = false;
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception e) { error = Ui.Error(e); }
+        finally { busy = false; }
+    }
+    private async Task Save()
+    {
+        if (loaded is null || busy || syncing) return;
+        busy = true; error = message = null;
+        try
+        {
+            loaded = await Ssh.SaveEnvironmentAsync(await Projects.GetTargetAsync(ProjectId, lifetime.Token),
+                new() { Content = draft, Version = loaded.Version }, lifetime.Token);
+            draft = loaded.Content; syncedAt = DateTimeOffset.UtcNow; remoteChanged = confirmReload = false;
+            message = ".env сохранён на сервере. Нажмите «Перезапустить», чтобы применить изменения в приложении.";
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception e) { error = Ui.Error(e); }
+        finally { busy = false; }
+    }
+    private async Task Poll()
+    {
+        try
+        {
+            while (!lifetime.IsCancellationRequested)
+            {
+                await Task.Delay(10000, lifetime.Token);
+                await InvokeAsync(async () => {
+                    if (!opened || busy || syncing || loaded is null || confirmReload) return;
+                    syncing = true;
+                    try
+                    {
+                        var current = await Ssh.ReadEnvironmentAsync(await Projects.GetTargetAsync(ProjectId, lifetime.Token), lifetime.Token);
+                        if (Dirty) remoteChanged = current.Version != loaded.Version;
+                        else { loaded = current; draft = current.Content; syncedAt = DateTimeOffset.UtcNow; remoteChanged = false; }
+                    }
+                    catch (OperationCanceledException) { }
+                    catch (Exception e) { error = Ui.Error(e); }
+                    finally { syncing = false; StateHasChanged(); }
+                });
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+    public void Dispose() { lifetime.Cancel(); lifetime.Dispose(); }
+}

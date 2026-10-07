@@ -83,7 +83,9 @@ public sealed class DeploymentWorker(IDbContextFactory<DeployItDbContext> factor
             var password = secrets.Unprotect(snapshot.Project.ProtectedPassword);
             sensitive.Add(password);
             sensitive.AddRange(password.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries));
-            exit = await ssh.DeployAsync(snapshot, deployment.Id, Append, ct);
+            exit = deployment.Operation == DeploymentOperation.Restart
+                ? await ssh.RestartAsync(snapshot, Append, ct)
+                : await ssh.DeployAsync(snapshot, deployment.Id, Append, ct);
             status = exit == 0 ? DeploymentStatus.Succeeded : DeploymentStatus.Failed;
             await Append(exit == 0 ? "Готово." : exit is 124 or 137
                 ? "Превышено время деплоя. Удалённая команда остановлена timeout." : $"Команда завершилась с кодом {exit}.");
