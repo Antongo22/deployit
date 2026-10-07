@@ -112,7 +112,9 @@ public sealed partial class SshDeploymentService(SecretProtector secrets)
             phase=clone; printf 'DEPLOYIT_STAGE=%s\n' "$phase"
             check_cancel
             printf '%s\n' 'Клонирование выбранной ветки…'
-            LC_ALL=C git -c credential.helper= -c http.followRedirects=false clone --depth 1 --branch {{Quote(project.Branch)}} -- {{Quote(project.RepositoryUrl)}} {{Quote(release)}} 9>&-
+            # Source files must remain readable after Docker COPY into a non-root image.
+            # Keep the parent shell's restrictive mask for credentials and run markers.
+            (umask 022; LC_ALL=C git -c credential.helper= -c http.followRedirects=false clone --depth 1 --branch {{Quote(project.Branch)}} -- {{Quote(project.RepositoryUrl)}} {{Quote(release)}}) 9>&-
             cd -- {{Quote(release)}}
             printf 'DEPLOYIT_COMMIT=%s\n' "$(git rev-parse HEAD)"
             phase=environment; printf 'DEPLOYIT_STAGE=%s\n' "$phase"
@@ -125,7 +127,7 @@ public sealed partial class SshDeploymentService(SecretProtector secrets)
             phase=deploy-command; printf 'DEPLOYIT_STAGE=%s\n' "$phase"
             check_cancel
             printf '%s\n' 'Выполнение команды деплоя…'
-            bash -lc {{Quote(project.DeployCommand)}} 9>&-
+            bash -lc {{Quote("umask 022\n" + project.DeployCommand)}} 9>&-
             phase=publish; printf 'DEPLOYIT_STAGE=%s\n' "$phase"
             check_cancel
             ln -s -- {{Quote(release)}} {{Quote(project.WorkingDirectory + "/.current-" + runId.ToString("N"))}}
@@ -192,7 +194,7 @@ public sealed partial class SshDeploymentService(SecretProtector secrets)
             if git rev-parse HEAD >/dev/null 2>&1; then printf 'DEPLOYIT_COMMIT=%s\n' "$(git rev-parse HEAD)"; fi
             phase={{(stopping ? "stop-command" : "restart-command")}}; printf 'DEPLOYIT_STAGE=%s\n' "$phase"
             check_cancel
-            bash -lc {{Quote(stopping ? project.StopCommand : project.RestartCommand)}} 9>&-
+            bash -lc {{Quote("umask 022\n" + (stopping ? project.StopCommand : project.RestartCommand))}} 9>&-
             phase=complete; printf 'DEPLOYIT_STAGE=%s\n' "$phase"
             printf '%s\n' {{Quote(stopping ? "Проект остановлен. Для запуска нажмите «Перезапустить» или «Развернуть»." : "Перезапуск завершён успешно.")}}
             """;
