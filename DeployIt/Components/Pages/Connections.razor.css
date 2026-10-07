@@ -1,0 +1,41 @@
+.token-help {
+    margin-top: 12px;
+    padding: 16px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--bg);
+    color: var(--muted);
+    font-size: 12px;
+    overflow-wrap: anywhere;
+}
+
+.token-help h3 {
+    margin: 0 0 12px;
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.token-help ol {
+    margin: 0 0 12px;
+    padding-left: 20px;
+}
+
+.token-help li + li {
+    margin-top: 10px;
+}
+
+.token-help strong {
+    color: var(--text);
+    font-weight: 500;
+}
+
+.token-help a {
+    color: var(--accent);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+}
+
+.token-help a:hover {
+    text-decoration-thickness: 2px;
+}
