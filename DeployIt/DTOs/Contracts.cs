@@ -5,12 +5,18 @@ namespace DeployIt.DTOs;
 
 public sealed class ConnectionInput
 {
-    [Required, StringLength(100)] public string Name { get; set; } = "";
+    [Required(ErrorMessage = "Укажите название подключения. Пример: Рабочий GitHub."),
+     StringLength(100, ErrorMessage = "Название подключения должно быть не длиннее 100 символов. Пример: Рабочий GitHub.")]
+    public string Name { get; set; } = "";
     public GitProvider Provider { get; set; }
-    [Required, Url] public string BaseUrl { get; set; } = "https://github.com";
+    [Required(ErrorMessage = "Укажите адрес Git-сервиса. Примеры: https://github.com или https://gitlab.com. Репозиторий выбирается при создании проекта."),
+     Url(ErrorMessage = "Нужен полный HTTPS-адрес Git-сервиса. Примеры: https://github.com или https://gitlab.com. Ссылку на репозиторий указывать здесь не нужно.")]
+    public string BaseUrl { get; set; } = "https://github.com";
     public bool PublicOnly { get; set; }
-    [StringLength(100)] public string Account { get; set; } = "";
-    [StringLength(1000)] public string Token { get; set; } = "";
+    [StringLength(100, ErrorMessage = "Имя аккаунта должно быть не длиннее 100 символов. Пример: octocat. Вставлять ссылку на репозиторий не нужно.")]
+    public string Account { get; set; } = "";
+    [StringLength(1000, ErrorMessage = "Access token должен быть не длиннее 1000 символов. Вставьте только значение токена из настроек Git-сервиса, без SSH-ключа или файла конфигурации.")]
+    public string Token { get; set; } = "";
 }
 
 public sealed class ProjectInput

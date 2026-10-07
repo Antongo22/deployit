@@ -21,15 +21,16 @@
     }
     </section>
     <section class="panel"><div class="eyebrow">НОВОЕ ПОДКЛЮЧЕНИЕ</div><h2>Откуда берём код?</h2>
+    <p class="form-note">Сначала подключите Git-сервис и аккаунт. Конкретный репозиторий выберете на следующем шаге — при создании проекта.</p>
     <EditForm Model="input" OnValidSubmit="Add" FormName="connection">
         <DataAnnotationsValidator /><ValidationSummary />
         <label>Git-сервис<InputSelect @bind-Value="input.Provider" @bind-Value:after="ProviderChanged"><option value="@GitProvider.GitHub">GitHub</option><option value="@GitProvider.GitLab">GitLab</option></InputSelect></label>
         <label>Название подключения<InputText @bind-Value="input.Name" placeholder="Например, рабочий GitHub" /></label>
-        <label>Адрес сервиса<InputText @bind-Value="input.BaseUrl" /><small>GitHub.com или HTTPS-адрес вашего GitLab.</small></label>
+        <label>Адрес сервиса<InputText @bind-Value="input.BaseUrl" placeholder="@ServiceUrlExample" aria-describedby="service-url-help" /><small id="service-url-help">Только адрес сайта: <code>@ServiceUrlExample</code>@(input.Provider == GitProvider.GitLab ? " или https://gitlab.example.com для своего GitLab." : ".") Без имени аккаунта и названия репозитория: <code>@RepositoryUrlExample</code> здесь указывать не нужно.</small></label>
         <label class="checkbox"><InputCheckbox @bind-Value="input.PublicOnly" /> Только публичные репозитории, без токена</label>
-        @if (input.PublicOnly) { <label>Имя аккаунта<InputText @bind-Value="input.Account" placeholder="username" /></label> }
+        @if (input.PublicOnly) { <label>Имя аккаунта<InputText @bind-Value="input.Account" placeholder="@(input.Provider == GitProvider.GitHub ? "Например, octocat" : "Например, alex")" aria-describedby="account-help" /><small id="account-help">Только имя пользователя: <code>@(input.Provider == GitProvider.GitHub ? "octocat" : "alex")</code>. Без ссылки и названия репозитория.</small></label> }
         else { <label>Access token<InputText type="password" @bind-Value="input.Token" autocomplete="off" /><small>GitHub: доступ к Metadata и Contents выбранных репозиториев. GitLab: read_api и read_repository.</small></label> }
-        <p class="form-note">Токен проверяется при подключении и сохраняется в зашифрованном виде.</p>
+        <p class="form-note">@(input.PublicOnly ? "Проверим, что аккаунт существует. Будут доступны только его публичные репозитории; токен не нужен." : "Токен проверяется при подключении и сохраняется в зашифрованном виде. Используйте personal access token из настроек Git-сервиса, а не пароль аккаунта.")</p>
         <button class="button primary full" type="submit" disabled="@busy">@(busy ? "Проверяем подключение…" : "Подключить аккаунт ↗")</button>
     </EditForm>
     </section>
@@ -42,7 +43,9 @@
     private string newToken = "";
     private Guid? confirm, rotate;
     protected override async Task OnInitializedAsync() { try { connections = await Service.ConnectionsAsync(); } catch (Exception e) { error = Ui.Error(e); } }
-    private void ProviderChanged() => input.BaseUrl = input.Provider == GitProvider.GitHub ? "https://github.com" : "https://gitlab.com";
+    private string ServiceUrlExample => input.Provider == GitProvider.GitHub ? "https://github.com" : "https://gitlab.com";
+    private string RepositoryUrlExample => input.Provider == GitProvider.GitHub ? "https://github.com/octocat/Hello-World" : "https://gitlab.com/alex/my-app";
+    private void ProviderChanged() { input.BaseUrl = ServiceUrlExample; error = message = null; }
     private async Task Add() { busy = true; error = message = null;
         try { await Service.AddConnectionAsync(input); input = new(); connections = await Service.ConnectionsAsync(); message = "Аккаунт подключён. Теперь можно создать проект."; }
         catch (Exception e) { error = Ui.Error(e); } finally { busy = false; }

@@ -22,7 +22,7 @@ public sealed class ProjectService(IDbContextFactory<DeployItDbContext> factory,
     {
         Validate(input);
         if (!input.PublicOnly && string.IsNullOrWhiteSpace(input.Token))
-            throw new DomainException("Для приватных репозиториев нужен токен.");
+            throw new DomainException("Заполните поле «Access token» токеном из настроек Git-сервиса. Если нужен только публичный репозиторий, включите «Только публичные репозитории, без токена» и укажите имя аккаунта. Пример имени: octocat.");
         var connection = new GitConnection { Name = input.Name.Trim(), Provider = input.Provider,
             BaseUrl = GitProviderService.NormalizeBaseUrl(input.Provider, input.BaseUrl),
             PublicOnly = input.PublicOnly, Account = input.Account.Trim(),
