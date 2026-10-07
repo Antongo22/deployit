@@ -1,0 +1,45 @@
+@using DeployIt.Services
+
+<section class="terminal deployment-log">
+    <div class="terminal-header">
+        <div><span class="terminal-dots">● ● ●</span> @Ui.Operation(Run.Operation) / @Run.Id.ToString("N")[..8]</div>
+        <div class="inline-actions">
+            @if (Ui.Active(Run.Status))
+            {
+                <button class="button danger" disabled="@(Busy || Run.CancelRequested)" @onclick="() => OnCancel.InvokeAsync(Run.Id)">@(Run.CancelRequested ? "Останавливаем…" : Run.Status == DeploymentStatus.Queued ? "Снять с очереди" : "Остановить")</button>
+            }
+            <StatusBadge Status="Run.Status" />
+        </div>
+    </div>
+    <div class="log-overview">
+        <span>Этап: <strong>@Run.Stage</strong></span>
+        <span>Код завершения: <code>@(Run.ExitCode?.ToString() ?? "—")</code></span>
+        @if (Run.CancelRequested && Ui.Active(Run.Status)) { <span class="accent">Ожидаем подтверждения остановки от SSH-сервера…</span> }
+    </div>
+    @if (!string.IsNullOrEmpty(Run.ErrorMessage))
+    {
+        <div class="log-result alert @(Run.Status == DeploymentStatus.Failed ? "error" : "warning")" role="@(Run.Status == DeploymentStatus.Failed ? "alert" : "status")">
+            <strong>@(Run.Status == DeploymentStatus.Failed ? "Что сломалось" : "Результат запуска")</strong>
+            <p>@Run.ErrorMessage</p>
+        </div>
+    }
+    @if (Run.Status is DeploymentStatus.Failed or DeploymentStatus.Interrupted && !string.IsNullOrEmpty(Run.Log))
+    {
+        <details class="log-error-output" open>
+            <summary>Последние строки вывода</summary>
+            <pre>@DeploymentDiagnostics.LastOutput(Run.Log)</pre>
+        </details>
+    }
+    <div class="log-title">Полный журнал</div>
+    <pre aria-live="polite">@(string.IsNullOrEmpty(Run.Log) ? "Ожидание запуска…" : Run.Log)</pre>
+    <div class="terminal-footer">
+        @if (Ui.Active(Run.Status)) { <span class="accent">● Журнал обновляется автоматически</span> }
+        else { <span>Начало @Ui.Time(Run.StartedAt) · Конец @Ui.Time(Run.FinishedAt) МСК</span> }
+    </div>
+</section>
+
+@code {
+    [Parameter, EditorRequired] public DeploymentView Run { get; set; } = default!;
+    [Parameter] public bool Busy { get; set; }
+    [Parameter] public EventCallback<Guid> OnCancel { get; set; }
+}

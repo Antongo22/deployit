@@ -43,6 +43,12 @@ public sealed class DeployItDbContext(DbContextOptions<DeployItDbContext> option
         }
         if (!columns.Contains("Operation"))
             await Database.ExecuteSqlRawAsync("ALTER TABLE \"Deployments\" ADD COLUMN \"Operation\" INTEGER NOT NULL DEFAULT 0;", ct);
+        if (!columns.Contains("CancelRequested"))
+            await Database.ExecuteSqlRawAsync("ALTER TABLE \"Deployments\" ADD COLUMN \"CancelRequested\" INTEGER NOT NULL DEFAULT 0;", ct);
+        if (!columns.Contains("Stage"))
+            await Database.ExecuteSqlRawAsync("ALTER TABLE \"Deployments\" ADD COLUMN \"Stage\" TEXT NOT NULL DEFAULT '';", ct);
+        if (!columns.Contains("ErrorMessage"))
+            await Database.ExecuteSqlRawAsync("ALTER TABLE \"Deployments\" ADD COLUMN \"ErrorMessage\" TEXT NULL;", ct);
         await transaction.CommitAsync(ct);
     }
 

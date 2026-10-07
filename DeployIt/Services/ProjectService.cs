@@ -74,7 +74,7 @@ public sealed class ProjectService(IDbContextFactory<DeployItDbContext> factory,
         var projects = await db.Projects.AsNoTracking().OrderBy(p => p.Name).ToListAsync(ct);
         var runs = await db.Deployments.AsNoTracking().OrderByDescending(d => d.CreatedAt)
             .Select(d => new DeploymentView(d.Id, d.ProjectId, d.Status, d.CreatedAt, d.StartedAt, d.FinishedAt,
-                d.CommitSha, d.ExitCode, null, d.Operation)).ToListAsync(ct);
+                d.CommitSha, d.ExitCode, null, d.Operation, d.Stage, d.ErrorMessage, d.CancelRequested)).ToListAsync(ct);
         return projects.Select(p => View(p, runs.FirstOrDefault(d => d.ProjectId == p.Id), runs.FirstOrDefault(d => d.ProjectId == p.Id && d.Status == DeploymentStatus.Succeeded))).ToList();
     }
 
@@ -86,11 +86,11 @@ public sealed class ProjectService(IDbContextFactory<DeployItDbContext> factory,
         var latest = await db.Deployments.AsNoTracking().Where(d => d.ProjectId == id)
             .OrderByDescending(d => d.CreatedAt)
             .Select(d => new DeploymentView(d.Id, d.ProjectId, d.Status, d.CreatedAt, d.StartedAt, d.FinishedAt,
-                d.CommitSha, d.ExitCode, null, d.Operation)).FirstOrDefaultAsync(ct);
+                d.CommitSha, d.ExitCode, null, d.Operation, d.Stage, d.ErrorMessage, d.CancelRequested)).FirstOrDefaultAsync(ct);
         var successful = await db.Deployments.AsNoTracking().Where(d => d.ProjectId == id && d.Status == DeploymentStatus.Succeeded)
             .OrderByDescending(d => d.CreatedAt)
             .Select(d => new DeploymentView(d.Id, d.ProjectId, d.Status, d.CreatedAt, d.StartedAt, d.FinishedAt,
-                d.CommitSha, d.ExitCode, null, d.Operation)).FirstOrDefaultAsync(ct);
+                d.CommitSha, d.ExitCode, null, d.Operation, d.Stage, d.ErrorMessage, d.CancelRequested)).FirstOrDefaultAsync(ct);
         return View(project, latest, successful);
     }
 
@@ -229,7 +229,7 @@ public sealed class ProjectService(IDbContextFactory<DeployItDbContext> factory,
         return await db.Deployments.AsNoTracking().Where(d => d.ProjectId == id)
             .OrderByDescending(d => d.CreatedAt).Take(100)
             .Select(d => new DeploymentView(d.Id, d.ProjectId, d.Status, d.CreatedAt, d.StartedAt, d.FinishedAt,
-                d.CommitSha, d.ExitCode, null, d.Operation)).ToListAsync(ct);
+                d.CommitSha, d.ExitCode, null, d.Operation, d.Stage, d.ErrorMessage, d.CancelRequested)).ToListAsync(ct);
     }
 
     public async Task<DeploymentView> DeploymentAsync(Guid id, CancellationToken ct = default)
@@ -237,6 +237,23 @@ public sealed class ProjectService(IDbContextFactory<DeployItDbContext> factory,
         await using var db = await factory.CreateDbContextAsync(ct);
         return View(await db.Deployments.AsNoTracking().FirstOrDefaultAsync(d => d.Id == id, ct)
             ?? throw new DomainException("Запуск не найден.", 404), true);
+    }
+
+    public async Task<DeploymentView> CancelDeploymentAsync(Guid id, CancellationToken ct = default)
+    {
+        await using var db = await factory.CreateDbContextAsync(ct);
+        // Conditional updates also cover a worker claiming the queued task concurrently.
+        var removed = await db.Deployments.Where(d => d.Id == id && d.Status == DeploymentStatus.Queued)
+            .ExecuteUpdateAsync(u => u.SetProperty(d => d.Status, DeploymentStatus.Canceled)
+                .SetProperty(d => d.CancelRequested, true)
+                .SetProperty(d => d.FinishedAt, DateTimeOffset.UtcNow)
+                .SetProperty(d => d.ProtectedSnapshot, "")
+                .SetProperty(d => d.ErrorMessage, "Запуск отменён пользователем до начала выполнения.")
+                .SetProperty(d => d.Log, d => d.Log + "Запуск снят с очереди пользователем.\n"), ct);
+        if (removed == 0)
+            await db.Deployments.Where(d => d.Id == id && d.Status == DeploymentStatus.Running)
+                .ExecuteUpdateAsync(u => u.SetProperty(d => d.CancelRequested, true), ct);
+        return await DeploymentAsync(id, ct);
     }
 
     public async Task<DeploymentProject> GetTargetAsync(Guid id, CancellationToken ct = default)
@@ -262,5 +279,7 @@ public sealed class ProjectService(IDbContextFactory<DeployItDbContext> factory,
         p.RepositoryId, p.RepositoryName, p.RepositoryUrl, p.Branch, p.Host, p.Port, p.Username,
         p.HostFingerprint, p.WorkingDirectory, p.DeployCommand, p.TimeoutMinutes, run, successful, p.AuthenticationType, p.RestartCommand);
     public static DeploymentView View(Deployment d, bool log = false) => new(d.Id, d.ProjectId, d.Status,
-        d.CreatedAt, d.StartedAt, d.FinishedAt, d.CommitSha, d.ExitCode, log ? d.Log : null, d.Operation);
+        d.CreatedAt, d.StartedAt, d.FinishedAt, d.CommitSha, d.ExitCode, log ? d.Log : null, d.Operation,
+        DeploymentDiagnostics.StageName(log && d.Stage == "" ? DeploymentDiagnostics.InferStage(d.Log) : d.Stage), d.ErrorMessage ?? (log && d.Status == DeploymentStatus.Failed
+            ? DeploymentDiagnostics.Failure(d.ExitCode, DeploymentDiagnostics.InferStage(d.Log), d.Log) : null), d.CancelRequested);
 }

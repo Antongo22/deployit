@@ -12,7 +12,7 @@
 else
 {
     <div class="page-heading"><div><div class="eyebrow">@project.RepositoryName</div><h1>@project.Name<span class="heading-dot">.</span></h1><div class="inline-actions"><StatusBadge Status="project.LatestDeployment?.Status" /><span class="muted mono">⌘ @project.Branch</span></div></div>
-        <div class="inline-actions"><a class="button" href="@($"/projects/{Id}/edit")">Настройки</a><button class="button" disabled="@(busy || Ui.Active(project.LatestDeployment?.Status))" @onclick="Restart">Перезапустить ↻</button><button class="button primary" disabled="@(busy || Ui.Active(project.LatestDeployment?.Status))" @onclick="Deploy">@(Ui.Active(project.LatestDeployment?.Status) ? project.LatestDeployment?.Operation == DeploymentOperation.Restart ? "Перезапуск в работе…" : "Деплой в работе…" : "Развернуть ↗")</button></div>
+        <div class="inline-actions"><a class="button" href="@($"/projects/{Id}/edit")">Настройки</a>@if (project.LatestDeployment is { } active && Ui.Active(active.Status)) { <button class="button danger" disabled="@(busy || active.CancelRequested)" @onclick="() => Cancel(active.Id)">@(active.CancelRequested ? "Останавливаем…" : active.Status == DeploymentStatus.Queued ? "Снять с очереди" : "Остановить")</button> }<button class="button" disabled="@(busy || Ui.Active(project.LatestDeployment?.Status))" @onclick="Restart">Перезапустить ↻</button><button class="button primary" disabled="@(busy || Ui.Active(project.LatestDeployment?.Status))" @onclick="Deploy">@(Ui.Active(project.LatestDeployment?.Status) ? project.LatestDeployment?.Operation == DeploymentOperation.Restart ? "Перезапуск в работе…" : "Деплой в работе…" : "Развернуть ↗")</button></div>
     </div>
     <div class="details-grid"><section class="panel"><div class="section-heading"><h2>Целевой сервер</h2><span class="tag">SSH</span></div><strong class="server-address">@project.Username@@@project.Host:@project.Port</strong><p class="mono muted">@project.WorkingDirectory</p><small class="mono fingerprint">@project.HostFingerprint</small><button class="button subtle" disabled="@busy" @onclick="Check">Проверить SSH</button></section>
         <section class="panel"><h2>Команда деплоя</h2><pre class="command">@project.DeployCommand</pre><h2>Команда перезапуска</h2><pre class="command">@project.RestartCommand</pre><div class="muted">Ветка <code>@project.Branch</code> · Таймаут @project.TimeoutMinutes мин.</div><p class="form-note">Последний успешный коммит: <code>@Ui.Commit(project.LastSuccessfulDeployment?.CommitSha)</code></p></section></div>
@@ -22,7 +22,7 @@ else
     @if (history.Count == 0) { <div class="empty small"><p>Запусков пока нет. Нажмите «Развернуть», чтобы получить код и выполнить команду.</p></div> }
     else { <div class="table-scroll"><table><thead><tr><th>ЗАПУСК</th><th>ДЕЙСТВИЕ</th><th>СТАТУС</th><th>КОММИТ</th><th>СОЗДАН</th><th>КОД</th><th></th></tr></thead><tbody>@foreach (var run in history) { <tr class="@(selected?.Id == run.Id ? "selected" : "")"><td><code>@run.Id.ToString("N")[..8]</code></td><td>@Ui.Operation(run.Operation)</td><td><StatusBadge Status="run.Status" /></td><td><code>@Ui.Commit(run.CommitSha)</code></td><td>@Ui.Time(run.CreatedAt)</td><td>@(run.ExitCode?.ToString() ?? "—")</td><td><button class="button subtle" @onclick="() => Select(run.Id)">Журнал ↗</button></td></tr> }</tbody></table></div> }
     </section>
-    @if (selected is not null) { <section class="terminal deployment-log"><div class="terminal-header"><div><span class="terminal-dots">● ● ●</span> @Ui.Operation(selected.Operation) / @selected.Id.ToString("N")[..8]</div><StatusBadge Status="selected.Status" /></div><pre aria-live="polite">@(string.IsNullOrEmpty(selected.Log) ? "Ожидание запуска…" : selected.Log)</pre><div class="terminal-footer">@if (Ui.Active(selected.Status)) { <span class="accent">● Журнал обновляется автоматически</span> } else { <span>Начало @Ui.Time(selected.StartedAt) · Конец @Ui.Time(selected.FinishedAt) МСК</span> }</div></section> }
+    @if (selected is not null) { <DeploymentLog Run="selected" Busy="busy" OnCancel="Cancel" /> }
     <div class="danger-zone"><button class="button danger subtle" disabled="@busy" @onclick="() => confirmDelete = !confirmDelete">Удалить проект</button>
         @if (confirmDelete) { <span>Удалить настройки проекта и историю? <button class="button danger" disabled="@busy" @onclick="Delete">Да, удалить</button></span> }
     </div>
@@ -57,6 +57,10 @@ else
     }
     private async Task Restart() { busy = true; error = message = null;
         try { selected = await Service.EnqueueRestartAsync(Id, lifetime.Token); await Refresh(); }
+        catch (Exception e) { error = Ui.Error(e); } finally { busy = false; }
+    }
+    private async Task Cancel(Guid runId) { busy = true; error = message = null;
+        try { selected = await Service.CancelDeploymentAsync(runId, lifetime.Token); await Refresh(); }
         catch (Exception e) { error = Ui.Error(e); } finally { busy = false; }
     }
     private async Task Delete() { busy = true; error = null;

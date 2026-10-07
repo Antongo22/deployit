@@ -1,7 +1,7 @@
 namespace DeployIt.Models;
 
 public enum GitProvider { GitHub, GitLab }
-public enum DeploymentStatus { Queued, Running, Succeeded, Failed, Interrupted }
+public enum DeploymentStatus { Queued, Running, Succeeded, Failed, Interrupted, Canceled }
 public enum SshAuthenticationType { PrivateKey, Password }
 public enum DeploymentOperation { Deploy, Restart }
 
@@ -58,6 +58,9 @@ public sealed class Deployment
     public int? ExitCode { get; set; }
     public string Log { get; set; } = "";
     public bool LogTruncated { get; set; }
+    public bool CancelRequested { get; set; }
+    public string Stage { get; set; } = "";
+    public string? ErrorMessage { get; set; }
     public string ProtectedSnapshot { get; set; } = "";
 }
 

@@ -52,7 +52,8 @@ public sealed record ConnectionView(Guid Id, string Name, GitProvider Provider, 
 public sealed record RepositoryView(string Id, string Name, string CloneUrl, string DefaultBranch);
 public sealed record DeploymentView(Guid Id, Guid ProjectId, DeploymentStatus Status,
     DateTimeOffset CreatedAt, DateTimeOffset? StartedAt, DateTimeOffset? FinishedAt,
-    string? CommitSha, int? ExitCode, string? Log, DeploymentOperation Operation = DeploymentOperation.Deploy);
+    string? CommitSha, int? ExitCode, string? Log, DeploymentOperation Operation = DeploymentOperation.Deploy,
+    string Stage = "", string? ErrorMessage = null, bool CancelRequested = false);
 public sealed record ProjectView(Guid Id, string Name, Guid ConnectionId, string RepositoryId,
     string RepositoryName, string RepositoryUrl, string Branch, string Host, int Port, string Username,
     string HostFingerprint, string WorkingDirectory, string DeployCommand, int TimeoutMinutes,

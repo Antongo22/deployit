@@ -10,7 +10,7 @@ public static class Ui
     public static string Status(DeploymentStatus? status) => status switch {
         DeploymentStatus.Queued => "В очереди", DeploymentStatus.Running => "Выполняется",
         DeploymentStatus.Succeeded => "Успешно", DeploymentStatus.Failed => "Ошибка",
-        DeploymentStatus.Interrupted => "Прерван", _ => "Нет запусков"
+        DeploymentStatus.Interrupted => "Прерван", DeploymentStatus.Canceled => "Остановлен", _ => "Нет запусков"
     };
     public static string Time(DateTimeOffset? time) => time?.ToOffset(TimeSpan.FromHours(3)).ToString("dd.MM.yyyy HH:mm:ss") ?? "—";
     public static string RepositoryLink(string url) => url.EndsWith(".git", StringComparison.Ordinal) ? url[..^4] : url;

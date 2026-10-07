@@ -49,6 +49,7 @@ public sealed partial class SshDeploymentService(SecretProtector secrets)
         using var key = LoadKey(project);
         using var client = new SshClient(Connection(project, key));
         Pin(client, project.HostFingerprint);
+        await log("DEPLOYIT_STAGE=ssh");
         await log("Подключение к SSH-серверу…");
         try { await client.ConnectAsync(ct); }
         catch (SshAuthenticationException) { throw AuthenticationError(project); }
@@ -58,6 +59,7 @@ public sealed partial class SshDeploymentService(SecretProtector secrets)
         {
             if (token != "")
             {
+                await log("DEPLOYIT_STAGE=credentials");
                 using var sftp = new SftpClient(Connection(project, key));
                 Pin(sftp, project.HostFingerprint);
                 await sftp.ConnectAsync(ct);
@@ -76,7 +78,7 @@ public sealed partial class SshDeploymentService(SecretProtector secrets)
             var stdout = ReadAsync(command.OutputStream, log, ct);
             var stderr = ReadAsync(command.ExtendedOutputStream, line => log("[stderr] " + line), ct);
             await Task.WhenAll(execute, stdout, stderr);
-            return command.ExitStatus ?? -1;
+            return CommandExitCode(command);
         }
         finally
         {
@@ -100,57 +102,63 @@ public sealed partial class SshDeploymentService(SecretProtector secrets)
     {
         var credentialDirectory = "/tmp/deployit-" + runId.ToString("N");
         var release = project.WorkingDirectory + "/releases/" + runId.ToString("N");
-        var cleanup = Quote("rm -rf -- " + Quote(credentialDirectory));
         var script = $$"""
-            set -euo pipefail
-            umask 077
-            trap {{cleanup}} EXIT
+            {{RunPrelude(project, runId, credentialDirectory)}}
             export GIT_TERMINAL_PROMPT=0
             export GIT_ASKPASS={{Quote(credentials ? credentialDirectory + "/askpass" : "/bin/false")}}
             mkdir -p -- {{Quote(project.WorkingDirectory + "/releases")}}
             exec 9>{{Quote(project.WorkingDirectory + "/.deployit.lock")}}
             flock -n 9 || { printf '%s\n' 'Другой деплой ещё выполняется на сервере.'; exit 75; }
+            phase=clone; printf 'DEPLOYIT_STAGE=%s\n' "$phase"
+            check_cancel
             printf '%s\n' 'Клонирование выбранной ветки…'
             LC_ALL=C git -c credential.helper= -c http.followRedirects=false clone --depth 1 --branch {{Quote(project.Branch)}} -- {{Quote(project.RepositoryUrl)}} {{Quote(release)}} 9>&-
             cd -- {{Quote(release)}}
             printf 'DEPLOYIT_COMMIT=%s\n' "$(git rev-parse HEAD)"
+            phase=environment; printf 'DEPLOYIT_STAGE=%s\n' "$phase"
+            check_cancel
             {{EnvironmentLink(project)}}
             export DEPLOYIT_RELEASE_DIR={{Quote(release)}}
             export DEPLOYIT_PROJECT_DIR={{Quote(project.WorkingDirectory)}}
             export DEPLOYIT_ENV_FILE={{Quote(project.WorkingDirectory + "/.env")}}
             export COMPOSE_PROJECT_NAME=deployit-{{project.Id:N}}
+            phase=deploy-command; printf 'DEPLOYIT_STAGE=%s\n' "$phase"
+            check_cancel
             printf '%s\n' 'Выполнение команды деплоя…'
             bash -lc {{Quote(project.DeployCommand)}} 9>&-
+            phase=publish; printf 'DEPLOYIT_STAGE=%s\n' "$phase"
+            check_cancel
             ln -s -- {{Quote(release)}} {{Quote(project.WorkingDirectory + "/.current-" + runId.ToString("N"))}}
             mv -Tf -- {{Quote(project.WorkingDirectory + "/.current-" + runId.ToString("N"))}} {{Quote(project.WorkingDirectory + "/current")}}
+            phase=complete; printf 'DEPLOYIT_STAGE=%s\n' "$phase"
             printf '%s\n' 'Деплой завершён успешно.'
             """;
-        return $"timeout --signal=TERM --kill-after=15s {project.TimeoutMinutes * 60}s bash -lc {Quote(script)}";
+        return $"timeout --signal=TERM --kill-after=15s {project.TimeoutMinutes * 60}s bash --noprofile --norc -c {Quote(script)}";
     }
 
-    public async Task<int> RestartAsync(DeploymentSnapshot snapshot, Func<string, Task> log, CancellationToken ct)
+    public async Task<int> RestartAsync(DeploymentSnapshot snapshot, Func<string, Task> log, CancellationToken ct, Guid? runId = null)
     {
         var project = snapshot.Project;
         using var key = LoadKey(project);
         using var client = new SshClient(Connection(project, key));
         Pin(client, project.HostFingerprint);
+        await log("DEPLOYIT_STAGE=ssh");
         await log("Подключение к SSH-серверу для перезапуска…");
         try { await client.ConnectAsync(ct); }
         catch (SshAuthenticationException) { throw AuthenticationError(project); }
-        using var command = client.CreateCommand(BuildRestartCommand(project));
+        using var command = client.CreateCommand(BuildRestartCommand(project, runId));
         command.CommandTimeout = TimeSpan.FromMinutes(project.TimeoutMinutes) + TimeSpan.FromSeconds(45);
         await log("Перезапуск текущего релиза без загрузки кода из репозитория…");
         var execute = command.ExecuteAsync(ct);
         await Task.WhenAll(execute, ReadAsync(command.OutputStream, log, ct),
             ReadAsync(command.ExtendedOutputStream, line => log("[stderr] " + line), ct));
-        return command.ExitStatus ?? -1;
+        return CommandExitCode(command);
     }
 
-    public static string BuildRestartCommand(DeploymentProject project)
+    public static string BuildRestartCommand(DeploymentProject project, Guid? runId = null)
     {
         var script = $$"""
-            set -euo pipefail
-            umask 077
+            {{RunPrelude(project, runId ?? Guid.NewGuid())}}
             root={{Quote(project.WorkingDirectory)}}
             if [ ! -d "$root/current" ]; then
                 printf '%s\n' 'Текущий релиз не найден. Сначала нажмите «Развернуть».' >&2
@@ -163,16 +171,24 @@ public sealed partial class SshDeploymentService(SecretProtector secrets)
             export DEPLOYIT_PROJECT_DIR="$root"
             export DEPLOYIT_ENV_FILE="$root/.env"
             export COMPOSE_PROJECT_NAME=deployit-{{project.Id:N}}
+            phase=environment; printf 'DEPLOYIT_STAGE=%s\n' "$phase"
             {{EnvironmentLink(project)}}
             if git rev-parse HEAD >/dev/null 2>&1; then printf 'DEPLOYIT_COMMIT=%s\n' "$(git rev-parse HEAD)"; fi
+            phase=restart-command; printf 'DEPLOYIT_STAGE=%s\n' "$phase"
+            check_cancel
             bash -lc {{Quote(project.RestartCommand)}} 9>&-
+            phase=complete; printf 'DEPLOYIT_STAGE=%s\n' "$phase"
             printf '%s\n' 'Перезапуск завершён успешно.'
             """;
-        return $"timeout --signal=TERM --kill-after=15s {project.TimeoutMinutes * 60}s bash -lc {Quote(script)}";
+        return $"timeout --signal=TERM --kill-after=15s {project.TimeoutMinutes * 60}s bash --noprofile --norc -c {Quote(script)}";
     }
 
     private static string EnvironmentLink(DeploymentProject project) =>
         $"if [ -f {Quote(project.WorkingDirectory + "/.env")} ]; then ln -sfnT -- {Quote(project.WorkingDirectory + "/.env")} .env; fi";
+
+    private static int CommandExitCode(SshCommand command) => command.ExitStatus ?? command.ExitSignal switch {
+        "KILL" => 137, "TERM" => 143, "HUP" => 129, "INT" => 130, _ => -1
+    };
 
     private PrivateKeyFile? LoadKey(DeploymentProject project) => project.AuthenticationType == SshAuthenticationType.PrivateKey ? new(
         new MemoryStream(Encoding.UTF8.GetBytes(secrets.Unprotect(project.ProtectedPrivateKey))),

@@ -13,4 +13,13 @@
 .ssh-terminal-frame{height:440px;min-width:0;padding:14px 14px 32px}
 .ssh-terminal-screen{height:100%;min-width:0;overflow:hidden;padding:0}
 .ssh-terminal-screen .xterm{height:100%;margin:0;padding:0;border:0;border-radius:0}
+.badge-canceled{background:#383020;color:#e4c589}
+.log-overview{display:flex;flex-wrap:wrap;gap:10px 24px;padding:14px 22px;border-bottom:1px solid var(--line);font-size:12px;color:var(--muted)}
+.log-overview strong{font-weight:500;color:var(--text)}
+.deployment-log .log-result{margin:18px 22px}
+.log-result p{margin:8px 0 0;white-space:pre-wrap}
+.log-title{padding:12px 22px 0;font-size:11px;color:var(--muted);border-top:1px solid var(--line)}
+.log-error-output{margin:0 22px 18px;border:1px solid #653340;border-radius:7px;overflow:hidden}
+.log-error-output summary{cursor:pointer;padding:10px 14px;color:#ffc0c8;font-size:12px;background:#291b22}
+.deployment-log .log-error-output pre{max-height:320px;min-height:0;padding:14px;font-size:12px}
 @media(max-width:750px){.ssh-terminal-frame{height:360px;padding:10px 10px 32px}.ssh-terminal-toolbar{padding:10px}.environment-panel .section-heading,.ssh-terminal-panel .section-heading{align-items:flex-start}.env-sync-status{align-items:flex-start;flex-direction:column}}
