@@ -73,6 +73,7 @@ public sealed class EnvironmentFileInput
 }
 
 public sealed record EnvironmentFileView(string Path, bool Exists, string Content, string Version);
+public sealed record ReleaseView(Guid Id, DateTimeOffset ModifiedAt, long SizeBytes, bool IsCurrent, bool InUse);
 
 public sealed class DomainException(string message, int statusCode = 400) : Exception(message)
 {

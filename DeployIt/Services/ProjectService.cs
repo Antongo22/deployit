@@ -217,6 +217,38 @@ public sealed class ProjectService(IDbContextFactory<DeployItDbContext> factory,
         finally { mutationGate.Release(); }
     }
 
+    public async Task<List<ReleaseView>> ReleasesAsync(Guid id, CancellationToken ct = default)
+    {
+        await mutationGate.WaitAsync(ct);
+        try
+        {
+            await using var db = await factory.CreateDbContextAsync(ct);
+            var project = await db.Projects.FindAsync([id], ct) ?? throw new DomainException("Проект не найден.", 404);
+            if (await db.Deployments.AnyAsync(d => d.ProjectId == id &&
+                (d.Status == DeploymentStatus.Queued || d.Status == DeploymentStatus.Running), ct))
+                throw new DomainException("Дождитесь завершения запуска перед просмотром релизов.", 409);
+            return await storage.ReleasesAsync(project, ct);
+        }
+        finally { mutationGate.Release(); }
+    }
+
+    public async Task DeleteReleaseAsync(Guid id, Guid releaseId, CancellationToken ct = default)
+    {
+        await mutationGate.WaitAsync(ct);
+        try
+        {
+            await using var db = await factory.CreateDbContextAsync(ct);
+            var project = await db.Projects.FindAsync([id], ct) ?? throw new DomainException("Проект не найден.", 404);
+            if (await db.Deployments.AnyAsync(d => d.ProjectId == id &&
+                (d.Status == DeploymentStatus.Queued || d.Status == DeploymentStatus.Running), ct))
+                throw new DomainException("Дождитесь завершения запуска перед удалением релиза.", 409);
+            var known = await db.Deployments.Where(d => d.ProjectId == id && d.Operation == DeploymentOperation.Deploy)
+                .Select(d => d.Id).ToListAsync(ct);
+            await storage.DeleteReleaseAsync(project, known, releaseId, ct);
+        }
+        finally { mutationGate.Release(); }
+    }
+
     public async Task<EnvironmentFileView> SaveEnvironmentAsync(Guid id, EnvironmentFileInput input, CancellationToken ct = default)
     {
         // Prevent a stale editor from recreating the directory while deletion is in progress.

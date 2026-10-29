@@ -28,12 +28,12 @@ else
     @if (Ui.Stopped(project.LatestDeployment)) { <div class="alert warning" role="status">Проект остановлен командой из настроек. Для запуска нажмите «Перезапустить» или «Развернуть».</div> }
     <ProjectEnvironment @key="(Id, typeof(DeployIt.Components.Shared.ProjectEnvironment))" ProjectId="Id" WorkingDirectory="@project.WorkingDirectory" />
     <ProjectTerminal @key="(Id, typeof(DeployIt.Components.Shared.ProjectTerminal))" ProjectId="Id" />
+    <ProjectReleases @key="(Id, typeof(DeployIt.Components.Shared.ProjectReleases))" ProjectId="Id" Active="@Ui.Active(project.LatestDeployment?.Status)" />
     <section class="panel history-panel"><div class="section-heading"><h2>История запусков</h2><small class="muted">Время МСК · последние 100 запусков</small></div>
     @if (history.Count == 0) { <div class="empty small"><p>Запусков пока нет. Нажмите «Развернуть», чтобы получить код и выполнить команду.</p></div> }
     else { <div class="table-scroll"><table><thead><tr><th>ЗАПУСК</th><th>ДЕЙСТВИЕ</th><th>СТАТУС</th><th>КОММИТ</th><th>СОЗДАН</th><th>КОД</th><th></th></tr></thead><tbody>@foreach (var run in history) { <tr class="@(selected?.Id == run.Id ? "selected" : "")"><td><code>@run.Id.ToString("N")[..8]</code></td><td>@Ui.Operation(run.Operation)</td><td><StatusBadge Status="run.Status" /></td><td><code>@Ui.Commit(run.CommitSha)</code></td><td>@Ui.Time(run.CreatedAt)</td><td>@(run.ExitCode?.ToString() ?? "—")</td><td><button class="button subtle" @onclick="() => Select(run.Id)">Журнал ↗</button></td></tr> }</tbody></table></div> }
     </section>
     @if (selected is not null) { <DeploymentLog Run="selected" Busy="busy" OnCancel="Cancel" /> }
-    <section class="panel"><h2>Хранение релизов</h2><p class="form-note">Автоматически сохраняются 3 релиза, включая текущий. Релизы, подключённые к контейнерам, сохраняются дополнительно. Можно очистить уже накопившиеся копии.</p><button class="button" disabled="@(busy || Ui.Active(project.LatestDeployment?.Status))" @onclick="CleanReleases">Очистить старые релизы</button></section>
     <div class="danger-zone"><button class="button danger subtle" disabled="@(busy || Ui.Active(project.LatestDeployment?.Status))" @onclick="() => confirmDelete = !confirmDelete">Удалить проект</button>
         @if (confirmDelete) { <span>Безвозвратно удалить каталог @project.WorkingDirectory, .env, Docker-контейнеры и тома с данными этого проекта, настройки и историю? <button class="button danger" disabled="@(busy || Ui.Active(project.LatestDeployment?.Status))" @onclick="Delete">Да, удалить всё</button></span> }
     </div>
@@ -80,10 +80,6 @@ else
     }
     private async Task Delete() { busy = true; error = null;
         try { await Service.DeleteProjectAsync(Id, lifetime.Token); Navigation.NavigateTo("/"); }
-        catch (Exception e) { error = Ui.Error(e); } finally { busy = false; }
-    }
-    private async Task CleanReleases() { busy = true; error = message = null;
-        try { await Service.CleanReleasesAsync(Id, lifetime.Token); message = "Старые релизы очищены. Текущий релиз и копии, подключённые к контейнерам, сохранены."; }
         catch (Exception e) { error = Ui.Error(e); } finally { busy = false; }
     }
     private async Task Poll() { try { while (!lifetime.IsCancellationRequested) { await Task.Delay(1500, lifetime.Token); await InvokeAsync(async () => { await Refresh(); StateHasChanged(); }); } } catch (OperationCanceledException) { } }

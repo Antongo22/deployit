@@ -13,8 +13,13 @@ var baseUrl = Environment.GetEnvironmentVariable("SMOKE_BASE_URL") ?? "http://de
 var username = Environment.GetEnvironmentVariable("SMOKE_ADMIN_USERNAME") ?? "admin";
 var password = Environment.GetEnvironmentVariable("SMOKE_ADMIN_PASSWORD");
 if (string.IsNullOrEmpty(password)) password = File.ReadAllText("/panel-data/admin-password").Trim();
-Directory.CreateDirectory("/artifacts");
-File.Delete("/artifacts/smoke-result.json");
+var artifacts = Environment.GetEnvironmentVariable("SMOKE_ARTIFACTS") ?? "/artifacts";
+var targetDirectory = Environment.GetEnvironmentVariable("SMOKE_TARGET_DIRECTORY") ?? "/target-data";
+var fixtureDirectory = Environment.GetEnvironmentVariable("SMOKE_FIXTURE_DIRECTORY") ?? "/fixture";
+var sshHost = Environment.GetEnvironmentVariable("SMOKE_SSH_HOST") ?? "ssh-target";
+var sshPort = Environment.GetEnvironmentVariable("SMOKE_SSH_PORT") ?? "22";
+Directory.CreateDirectory(artifacts);
+File.Delete(Path.Combine(artifacts, "smoke-result.json"));
 using var client = new HttpClient(new HttpClientHandler { CookieContainer = new CookieContainer() }) {
     BaseAddress = new Uri(baseUrl), Timeout = TimeSpan.FromSeconds(60) };
 var anonymous = await client.GetAsync("/api/projects");
@@ -55,7 +60,7 @@ try {
     await page.GetByRole(AriaRole.Button, new() { Name = "Войти в панель" }).ClickAsync();
     await Ready();
     await Expect(page.GetByRole(AriaRole.Heading, new() { NameRegex = new Regex("Ваши проекты") })).ToBeVisibleAsync();
-    await page.ScreenshotAsync(new() { Path = "/artifacts/dashboard.png", FullPage = true });
+    await page.ScreenshotAsync(new() { Path = Path.Combine(artifacts, "dashboard.png"), FullPage = true });
     await page.GotoAsync(baseUrl + "/connections"); await Ready();
     await page.GetByLabel("Название подключения").FillAsync("Compose smoke GitHub");
     await page.GetByLabel("Только публичные репозитории, без токена").CheckAsync();
@@ -67,15 +72,16 @@ try {
     var repositories = await Api("GET", $"/api/connections/{connectionId}/repositories");
     var repository = repositories.EnumerateArray().Single(r => r.GetProperty("name").GetString() == "octocat/Hello-World");
     Check(repository.GetProperty("cloneUrl").GetString()!.StartsWith("https://github.com/"), "Real GitHub repositories loaded");
-    await page.ScreenshotAsync(new() { Path = "/artifacts/connections.png", FullPage = true });
+    await page.ScreenshotAsync(new() { Path = Path.Combine(artifacts, "connections.png"), FullPage = true });
     await page.GotoAsync(baseUrl + "/projects/new"); await Ready();
     await page.GetByLabel("Git-подключение").SelectOptionAsync(connectionId.Value.ToString());
     await page.GetByLabel("Репозиторий").SelectOptionAsync(repository.GetProperty("id").GetString()!);
     await page.GetByLabel("Название проекта").FillAsync("Compose SSH smoke");
-    await page.GetByLabel("Адрес сервера").FillAsync("ssh-target");
+    await page.GetByLabel("Адрес сервера").FillAsync(sshHost);
+    await page.GetByLabel("Порт", new() { Exact = true }).FillAsync(sshPort);
     await page.GetByRole(AriaRole.Button, new() { Name = "Получить отпечаток" }).ClickAsync();
     await Expect(page.GetByLabel("Отпечаток SSH-ключа сервера")).ToHaveValueAsync(new Regex("^SHA256:"));
-    await page.GetByLabel("Приватный SSH-ключ").FillAsync(File.ReadAllText("/fixture/client"));
+    await page.GetByLabel("Приватный SSH-ключ").FillAsync(File.ReadAllText(Path.Combine(fixtureDirectory, "client")));
     await page.GetByLabel("Корневой каталог на сервере").FillAsync("/opt/apps/smoke");
     await page.GetByLabel("Команда деплоя").FillAsync("test -f README && printf 'COMPOSE_SSH_OK\\n' && sleep 5");
     await page.GetByRole(AriaRole.Button, new() { Name = "Сохранить проект" }).ClickAsync();
@@ -92,10 +98,10 @@ try {
     Check(first.GetProperty("status").GetString() == "Succeeded", "One-click SSH deployment succeeded");
     Check(first.GetProperty("log").GetString()!.Contains("COMPOSE_SSH_OK"), "Remote command output persisted");
     Check(first.GetProperty("commitSha").GetString()!.Length == 40, "Git commit SHA recorded");
-    var link = new DirectoryInfo("/target-data/smoke/current").LinkTarget;
+    var link = new DirectoryInfo(Path.Combine(targetDirectory, "smoke", "current")).LinkTarget;
     Check(link?.EndsWith(firstId.ToString("N")) == true, "Successful release becomes current");
     await Expect(page.Locator(".terminal .badge")).ToHaveTextAsync("Успешно");
-    await page.ScreenshotAsync(new() { Path = "/artifacts/deployment.png", FullPage = true });
+    await page.ScreenshotAsync(new() { Path = Path.Combine(artifacts, "deployment.png"), FullPage = true });
     await page.GetByRole(AriaRole.Link, new() { Name = "Настройки", Exact = true }).ClickAsync();
     await Expect(page.GetByLabel("Приватный SSH-ключ")).ToHaveValueAsync("");
     await page.GetByLabel("Команда деплоя").FillAsync("printf 'EXPECTED_FAILURE\\n' >&2; exit 7");
@@ -105,7 +111,7 @@ try {
     var failed = await WaitRun(second.GetProperty("id").GetGuid());
     Check(failed.GetProperty("status").GetString() == "Failed" && failed.GetProperty("exitCode").GetInt32() == 7, "Nonzero exit marks deployment failed");
     Check(failed.GetProperty("log").GetString()!.Contains("[stderr] EXPECTED_FAILURE"), "stderr is captured");
-    Check(new DirectoryInfo("/target-data/smoke/current").LinkTarget == link, "Failed deployment preserves previous current release");
+    Check(new DirectoryInfo(Path.Combine(targetDirectory, "smoke", "current")).LinkTarget == link, "Failed deployment preserves previous current release");
     var project = await Api("GET", $"/api/projects/{projectId}");
     var raw = project.GetRawText();
     Check(!raw.Contains("PRIVATE KEY") && !raw.Contains("protectedPrivateKey"), "Project API does not expose SSH credentials");
@@ -122,35 +128,54 @@ try {
         }
         """, connectionId.Value.ToString());
     Check(swaggerMutationStatus == 409, "Swagger mutation passes CSRF and respects connection dependencies");
-    await page.ScreenshotAsync(new() { Path = "/artifacts/swagger.png", FullPage = true });
+    await page.ScreenshotAsync(new() { Path = Path.Combine(artifacts, "swagger.png"), FullPage = true });
     await page.GotoAsync(baseUrl + "/"); await Ready();
     await page.SetViewportSizeAsync(390, 844);
-    await page.ScreenshotAsync(new() { Path = "/artifacts/mobile.png", FullPage = true });
+    await page.ScreenshotAsync(new() { Path = Path.Combine(artifacts, "mobile.png"), FullPage = true });
     var overflow = await page.EvaluateAsync<bool>("document.documentElement.scrollWidth > window.innerWidth");
     Check(!overflow, "Mobile layout fits viewport");
     Check(browserErrors.Count == 0, "Blazor pages have no JavaScript exceptions");
     await page.GotoAsync(baseUrl + $"/projects/{projectId}"); await Ready();
+    var releases = await Api("GET", $"/api/projects/{projectId}/releases");
+    Check(releases.GetArrayLength() == 2, "Release API lists successful and failed copies");
+    Check(releases.EnumerateArray().Single(r => r.GetProperty("isCurrent").GetBoolean()).GetProperty("id").GetGuid() == firstId, "Release API identifies current copy");
+    await Api("DELETE", $"/api/projects/{projectId}/releases/{firstId}", null, HttpStatusCode.Conflict);
+    var currentRow = page.Locator("#project-releases tbody tr").Filter(new() { HasText = firstId.ToString("N")[..12] });
+    await Expect(currentRow.GetByRole(AriaRole.Button, new() { Name = "Удалить релиз", Exact = true })).ToBeDisabledAsync();
+    var failedId = second.GetProperty("id").GetGuid();
+    var failedRow = page.Locator("#project-releases tbody tr").Filter(new() { HasText = failedId.ToString("N")[..12] });
+    await page.Locator("#project-releases").ScreenshotAsync(new() { Path = Path.Combine(artifacts, "releases-mobile.png") });
+    Check(!await page.EvaluateAsync<bool>("document.documentElement.scrollWidth > window.innerWidth"), "Release list fits mobile viewport");
+    await page.SetViewportSizeAsync(1440, 1000);
+    await page.Locator("#project-releases").ScreenshotAsync(new() { Path = Path.Combine(artifacts, "releases.png") });
+    await failedRow.GetByRole(AriaRole.Button, new() { Name = "Удалить релиз", Exact = true }).ClickAsync();
+    await page.GetByRole(AriaRole.Button, new() { Name = "Да, удалить релиз", Exact = true }).ClickAsync();
+    await Expect(page.GetByText($"Релиз {failedId.ToString("N")[..12]} удалён.")).ToBeVisibleAsync();
+    Check(!Directory.Exists(Path.Combine(targetDirectory, "smoke", "releases", failedId.ToString("N"))), "UI deletes only selected unused release over SSH");
+    Check((await Api("GET", $"/api/projects/{projectId}/deployments")).GetArrayLength() == 2, "Release deletion retains deployment history");
     await page.GetByRole(AriaRole.Button, new() { Name = "Очистить старые релизы", Exact = true }).ClickAsync();
     await Expect(page.GetByText("Старые релизы очищены. Текущий релиз и копии, подключённые к контейнерам, сохранены.")).ToBeVisibleAsync();
     await Api("POST", $"/api/projects/{projectId}/cleanup", null, HttpStatusCode.NoContent);
-    Check(Directory.Exists("/target-data/smoke/current"), "Cleanup preserves current release over real SSH");
+    var afterCleanup = await Api("GET", $"/api/projects/{projectId}/releases");
+    Check(afterCleanup.EnumerateArray().Any(r => r.GetProperty("id").GetGuid() == firstId && r.GetProperty("isCurrent").GetBoolean()), "Cleanup preserves current release over real SSH");
     var environment = await Api("GET", $"/api/projects/{projectId}/environment");
     await Api("PUT", $"/api/projects/{projectId}/environment", new { version = environment.GetProperty("version").GetString(), content = "SMOKE_DELETE=1\n" });
-    Check(File.Exists("/target-data/smoke/.env"), "Server environment saved before deletion");
+    Check(File.Exists(Path.Combine(targetDirectory, "smoke", ".env")), "Server environment saved before deletion");
     await page.GetByRole(AriaRole.Button, new() { Name = "Удалить проект", Exact = true }).ClickAsync();
     await page.GetByRole(AriaRole.Button, new() { Name = "Да, удалить всё", Exact = true }).ClickAsync();
     await page.WaitForURLAsync(baseUrl + "/");
-    Check(!Directory.Exists("/target-data/smoke"), "Project deletion removes releases and environment over real SSH");
+    Check(!Directory.Exists(Path.Combine(targetDirectory, "smoke")), "Project deletion removes releases and environment over real SSH");
     await Api("GET", $"/api/projects/{projectId}", null, HttpStatusCode.NotFound);
     Check((await Api("GET", $"/api/projects/{projectId}/deployments")).GetArrayLength() == 0, "Project deletion removes history");
     projectId = null;
-    await File.WriteAllTextAsync("/artifacts/smoke-result.json", JsonSerializer.Serialize(new {
+    Check(browserErrors.Count == 0, "Release management has no JavaScript exceptions");
+    await File.WriteAllTextAsync(Path.Combine(artifacts, "smoke-result.json"), JsonSerializer.Serialize(new {
         passed = true, firstRun = firstId, commit = first.GetProperty("commitSha").GetString(),
-        failureExitCode = 7, browserErrors, checks = "Blazor UI, GitHub, SSH, queue, history, stderr, release promotion, CSRF, Swagger, mobile, release cleanup, project deletion" }, new JsonSerializerOptions { WriteIndented = true }));
+        failureExitCode = 7, browserErrors, checks = "Blazor UI, GitHub, SSH, queue, history, stderr, release promotion, CSRF, Swagger, mobile, release list and deletion, release cleanup, project deletion" }, new JsonSerializerOptions { WriteIndented = true }));
     Console.WriteLine("PASS: Compose + Blazor + GitHub + real SSH deployment and failure handling.");
 } catch {
     Console.WriteLine("BROWSER ERRORS: " + string.Join("; ", browserErrors));
-    await page.ScreenshotAsync(new() { Path = "/artifacts/smoke-failure.png", FullPage = true,
+    await page.ScreenshotAsync(new() { Path = Path.Combine(artifacts, "smoke-failure.png"), FullPage = true,
         Mask = [page.Locator("textarea, input[type='password']")] });
     throw;
 } finally {

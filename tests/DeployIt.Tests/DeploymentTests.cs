@@ -73,6 +73,8 @@ public sealed class DeploymentTests
         await fixture.Service.EnqueueAsync(project.Id);
         Assert.Equal(409, (await Assert.ThrowsAsync<DomainException>(() => fixture.Service.DeleteProjectAsync(project.Id))).StatusCode);
         Assert.Equal(409, (await Assert.ThrowsAsync<DomainException>(() => fixture.Service.CleanReleasesAsync(project.Id))).StatusCode);
+        Assert.Equal(409, (await Assert.ThrowsAsync<DomainException>(() => fixture.Service.ReleasesAsync(project.Id))).StatusCode);
+        Assert.Equal(409, (await Assert.ThrowsAsync<DomainException>(() => fixture.Service.DeleteReleaseAsync(project.Id, Guid.NewGuid()))).StatusCode);
         Assert.Equal(0, fixture.Storage.Calls);
         Assert.Equal(409, (await Assert.ThrowsAsync<DomainException>(() => fixture.Service.SaveProjectAsync(input, project.Id))).StatusCode);
         Assert.Equal(409, (await Assert.ThrowsAsync<DomainException>(() => fixture.Service.DeleteConnectionAsync(connection.Id))).StatusCode);
@@ -121,6 +123,27 @@ public sealed class DeploymentTests
         var snapshot = JsonSerializer.Deserialize<DeploymentSnapshot>(fixture.Secrets.Unprotect(saved.ProtectedSnapshot))!;
         Assert.Equal("printf original", snapshot.Project.DeployCommand);
         Assert.Equal("private-token", fixture.Secrets.Unprotect(snapshot.Connection.ProtectedToken));
+    }
+
+    [Fact]
+    public async Task ReleaseDeletionUsesProjectHistoryAndKeepsProjectAndLogs()
+    {
+        using var fixture = new Fixture();
+        var connection = await fixture.Connect();
+        var project = await fixture.Service.SaveProjectAsync(fixture.Input(connection.Id));
+        var run = await fixture.Service.EnqueueAsync(project.Id);
+        await using (var db = fixture.Factory.CreateDbContext()) {
+            (await db.Deployments.FindAsync(run.Id))!.Status = DeploymentStatus.Failed;
+            await db.SaveChangesAsync();
+        }
+        fixture.Storage.ReleaseItems.Add(new(run.Id, DateTimeOffset.UtcNow, 4096, false, false));
+        Assert.Equal(run.Id, Assert.Single(await fixture.Service.ReleasesAsync(project.Id)).Id);
+        await fixture.Service.DeleteReleaseAsync(project.Id, run.Id);
+        Assert.Equal(run.Id, fixture.Storage.DeletedRelease);
+        Assert.Equal(run.Id, Assert.Single(fixture.Storage.KnownReleases));
+        Assert.Single(await fixture.Service.HistoryAsync(project.Id));
+        Assert.Equal(project.Id, (await fixture.Service.ProjectAsync(project.Id)).Id);
+        Assert.Equal(404, (await Assert.ThrowsAsync<DomainException>(() => fixture.Service.DeleteReleaseAsync(Guid.NewGuid(), run.Id))).StatusCode);
     }
 
     [Theory]
@@ -344,6 +367,54 @@ public sealed class DeploymentTests
         } finally { Directory.Delete(directory, true); }
     }
 
+    [LinuxFact]
+    public async Task ReleaseListShowsSizesAndOnlyUnusedCopiesCanBeDeleted()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "deployit-release-ui-" + Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(directory, "app's folder");
+        var project = new DeploymentProject { WorkingDirectory = root, TimeoutMinutes = 1 };
+        var ids = Enumerable.Range(0, 3).Select(_ => Guid.NewGuid()).ToArray();
+        Directory.CreateDirectory(root);
+        try {
+            Assert.Equal("[]", (await Shell(SshDeploymentService.BuildReleaseCommand(project, [], null))).Output);
+            await File.WriteAllTextAsync(Path.Combine(root, ".deployit-project"), project.Id.ToString("N"));
+            await File.WriteAllTextAsync(Path.Combine(root, ".env"), "KEEP=1");
+            foreach (var id in ids) {
+                var release = Path.Combine(root, "releases", id.ToString("N")); Directory.CreateDirectory(release);
+                await File.WriteAllTextAsync(Path.Combine(release, "source"), new string('x', 5000));
+            }
+            Directory.CreateSymbolicLink(Path.Combine(root, "current"), Path.Combine(root, "releases", ids[0].ToString("N")));
+            Directory.CreateDirectory(Path.Combine(root, "releases", "user-files"));
+            var bin = Path.Combine(directory, "bin"); Directory.CreateDirectory(bin);
+            var docker = Path.Combine(bin, "docker");
+            await File.WriteAllTextAsync(docker, $$"""
+                #!/bin/bash
+                case "$1" in
+                    ps) printf 'fixture-container\n' ;;
+                    inspect) printf '%s\n' {{SshDeploymentService.Quote(Path.Combine(root, "releases", ids[1].ToString("N"), "uploads"))}} ;;
+                esac
+                """);
+            if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(docker, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            string Command(Guid? id) => "export PATH=" + SshDeploymentService.Quote(bin) + ":\"$PATH\"; " + SshDeploymentService.BuildReleaseCommand(project, ids, id);
+            var listed = await Shell(Command(null)); Assert.Equal(0, listed.ExitCode);
+            using var json = JsonDocument.Parse(listed.Output);
+            Assert.Equal(3, json.RootElement.GetArrayLength());
+            var rows = json.RootElement.EnumerateArray().ToDictionary(r => Guid.Parse(r.GetProperty("id").GetString()!));
+            Assert.True(rows[ids[0]].GetProperty("isCurrent").GetBoolean());
+            Assert.True(rows[ids[1]].GetProperty("inUse").GetBoolean());
+            Assert.False(rows[ids[2]].GetProperty("inUse").GetBoolean());
+            Assert.All(rows.Values, r => Assert.True(r.GetProperty("sizeBytes").GetInt64() >= 5000));
+            Assert.All(rows.Values, r => Assert.True(r.GetProperty("modifiedAtUnix").GetInt64() > 0));
+            Assert.Equal(79, (await Shell(Command(ids[0]))).ExitCode);
+            Assert.Equal(80, (await Shell(Command(ids[1]))).ExitCode);
+            Assert.Equal(0, (await Shell(Command(ids[2]))).ExitCode);
+            Assert.False(Directory.Exists(Path.Combine(root, "releases", ids[2].ToString("N"))));
+            Assert.Equal(81, (await Shell(Command(ids[2]))).ExitCode);
+            Assert.Equal("KEEP=1", await File.ReadAllTextAsync(Path.Combine(root, ".env")));
+            Assert.True(Directory.Exists(Path.Combine(root, "releases", "user-files")));
+        } finally { Directory.Delete(directory, true); }
+    }
+
     private static async Task<(int ExitCode, string Output)> Shell(string command)
     {
         using var process = new Process { StartInfo = new ProcessStartInfo("bash") {
@@ -381,6 +452,11 @@ public sealed class DeploymentTests
         public int Calls { get; private set; }
         public bool Fail { get; set; }
         public IReadOnlyCollection<Guid> KnownReleases { get; private set; } = [];
+        public List<ReleaseView> ReleaseItems { get; } = [];
+        public Guid? DeletedRelease { get; private set; }
+        public Task<List<ReleaseView>> ReleasesAsync(DeploymentProject project, CancellationToken ct) => Task.FromResult(ReleaseItems);
+        public Task DeleteReleaseAsync(DeploymentProject project, IReadOnlyCollection<Guid> knownReleases, Guid releaseId, CancellationToken ct)
+        { DeletedRelease = releaseId; return DeleteAsync(project, knownReleases, ct); }
         public Task<EnvironmentFileView> SaveEnvironmentAsync(DeploymentProject project, EnvironmentFileInput input, CancellationToken ct)
             => Task.FromResult(new EnvironmentFileView(project.WorkingDirectory + "/.env", true, input.Content, input.Version));
         public Task CleanReleasesAsync(DeploymentProject project, IReadOnlyCollection<Guid> knownReleases, CancellationToken ct)

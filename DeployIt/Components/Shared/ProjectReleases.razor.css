@@ -1,0 +1,12 @@
+.section-heading {
+    flex-wrap: wrap;
+    align-items: flex-start;
+}
+
+.inline-actions {
+    gap: 8px;
+}
+
+.alert .inline-actions {
+    margin-top: 12px;
+}

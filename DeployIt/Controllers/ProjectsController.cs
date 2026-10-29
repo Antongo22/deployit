@@ -18,6 +18,10 @@ public sealed class ProjectsController(ProjectService projects, SshDeploymentSer
     { await projects.DeleteProjectAsync(id, ct); return NoContent(); }
     [HttpPost("{id:guid}/cleanup")] public async Task<IActionResult> CleanReleases(Guid id, CancellationToken ct)
     { await projects.CleanReleasesAsync(id, ct); return NoContent(); }
+    [HttpGet("{id:guid}/releases")] public Task<List<ReleaseView>> Releases(Guid id, CancellationToken ct)
+        => projects.ReleasesAsync(id, ct);
+    [HttpDelete("{id:guid}/releases/{releaseId:guid}")] public async Task<IActionResult> DeleteRelease(Guid id, Guid releaseId, CancellationToken ct)
+    { await projects.DeleteReleaseAsync(id, releaseId, ct); return NoContent(); }
     [HttpPost("{id:guid}/deploy")] public async Task<IActionResult> Deploy(Guid id, CancellationToken ct)
     { var run = await projects.EnqueueAsync(id, ct); return Accepted($"/api/deployments/{run.Id}", run); }
     [HttpPost("{id:guid}/restart")] public async Task<IActionResult> Restart(Guid id, CancellationToken ct)

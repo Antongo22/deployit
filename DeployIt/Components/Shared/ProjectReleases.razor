@@ -1,0 +1,101 @@
+@implements IDisposable
+@inject ProjectService Service
+
+<section class="panel history-panel" id="project-releases">
+    <div class="section-heading">
+        <div><h2>Релизы на сервере</h2><small class="muted">@(releases is null ? "Копии кода в каталоге releases" : $"Копий: {releases.Count} · На диске: {Size(releases.Sum(r => r.SizeBytes))}")</small></div>
+        <div class="inline-actions">
+            <button class="button" disabled="@(busy || Active)" @onclick="Refresh">@(busy ? "Обрабатываем…" : "Обновить список")</button>
+            <button class="button" disabled="@(busy || Active)" @onclick="Clean">Очистить старые релизы</button>
+        </div>
+    </div>
+    <p class="form-note">Автоматически сохраняются @SshDeploymentService.ReleasesToKeep релиза, включая текущий. Копии, подключённые к контейнерам, сохраняются дополнительно. Отдельный неиспользуемый релиз можно удалить вручную.</p>
+    @if (error is not null) { <div class="alert error" role="alert">@error</div> }
+    @if (message is not null) { <div class="alert success" role="status">@message</div> }
+    @if (Active) { <p class="muted">Список и удаление релизов будут доступны после завершения текущего запуска.</p> }
+    @if (releases is { Count: > 0 })
+    {
+        <div class="table-scroll"><table><thead><tr><th>РЕЛИЗ</th><th>ИЗМЕНЁН, МСК</th><th>НА ДИСКЕ</th><th>СОСТОЯНИЕ</th><th></th></tr></thead><tbody>
+        @foreach (var release in releases)
+        {
+            <tr @key="release.Id">
+                <td><code title="@release.Id.ToString("N")">@release.Id.ToString("N")[..12]</code></td>
+                <td>@Ui.Time(release.ModifiedAt)</td><td>@Size(release.SizeBytes)</td>
+                <td>@if (release.IsCurrent) { <span class="tag">Текущий</span> } else if (release.InUse) { <span class="tag">Используется контейнером</span> } else { <span class="muted">Не используется</span> }</td>
+                <td><button class="button danger subtle" disabled="@(busy || Active || release.IsCurrent || release.InUse)" @onclick="() => confirmDelete = release.Id">Удалить релиз</button></td>
+            </tr>
+        }
+        </tbody></table></div>
+    }
+    else if (!busy && !Active && releases is not null) { <div class="empty small"><p>Релизов пока нет. Они появятся после первого деплоя.</p></div> }
+    @if (releases?.FirstOrDefault(r => r.Id == confirmDelete) is { } selected)
+    {
+        <div class="alert warning">Удалить релиз <code>@selected.Id.ToString("N")</code> (@Size(selected.SizeBytes))? Файлы этой копии будут удалены безвозвратно. История запусков сохранится.
+            <div class="inline-actions"><button class="button danger" disabled="@(busy || Active)" @onclick="() => Delete(selected)">Да, удалить релиз</button><button class="button" disabled="@busy" @onclick="() => confirmDelete = null">Отмена</button></div>
+        </div>
+    }
+</section>
+
+@code {
+    [Parameter] public Guid ProjectId { get; set; }
+    [Parameter] public bool Active { get; set; }
+    private List<ReleaseView>? releases;
+    private Guid? loadedFor, confirmDelete;
+    private string? error, message;
+    private bool busy, wasActive, interactive;
+    private readonly CancellationTokenSource lifetime = new();
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (loadedFor != ProjectId || (wasActive && !Active))
+        {
+            loadedFor = ProjectId; confirmDelete = null;
+            if (interactive && !Active) await Refresh();
+        }
+        wasActive = Active;
+    }
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        interactive = true;
+        if (!Active) { await Refresh(); StateHasChanged(); }
+    }
+    private async Task Refresh()
+    {
+        if (busy || Active) return;
+        busy = true; error = message = null; confirmDelete = null;
+        try { releases = await Service.ReleasesAsync(ProjectId, lifetime.Token); }
+        catch (OperationCanceledException) { }
+        catch (Exception e) { error = Ui.Error(e); }
+        finally { busy = false; }
+    }
+    private async Task Clean()
+    {
+        if (busy || Active) return;
+        busy = true; error = message = null; confirmDelete = null;
+        try {
+            await Service.CleanReleasesAsync(ProjectId, lifetime.Token);
+            releases = await Service.ReleasesAsync(ProjectId, lifetime.Token);
+            message = "Старые релизы очищены. Текущий релиз и копии, подключённые к контейнерам, сохранены.";
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception e) { error = Ui.Error(e); }
+        finally { busy = false; }
+    }
+    private async Task Delete(ReleaseView release)
+    {
+        if (busy || Active || release.IsCurrent || release.InUse) return;
+        busy = true; error = message = null; confirmDelete = null;
+        try {
+            await Service.DeleteReleaseAsync(ProjectId, release.Id, lifetime.Token);
+            releases = await Service.ReleasesAsync(ProjectId, lifetime.Token);
+            message = $"Релиз {release.Id.ToString("N")[..12]} удалён.";
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception e) { error = Ui.Error(e); }
+        finally { busy = false; }
+    }
+    private static string Size(long bytes) => bytes >= 1024L * 1024 * 1024 ? $"{bytes / (1024d * 1024 * 1024):0.##} ГБ"
+        : bytes >= 1024 * 1024 ? $"{bytes / (1024d * 1024):0.##} МБ" : bytes >= 1024 ? $"{bytes / 1024d:0.##} КБ" : $"{bytes} Б";
+    public void Dispose() { lifetime.Cancel(); lifetime.Dispose(); }
+}
