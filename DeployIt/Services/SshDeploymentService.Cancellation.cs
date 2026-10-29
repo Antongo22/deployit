@@ -18,6 +18,9 @@ public sealed partial class SshDeploymentService
             result=$?
             trap - EXIT
             if [ "$result" -ne 0 ]; then printf 'DEPLOYIT_FAILURE=%s:%s\n' "$phase" "$result" >&2; fi
+            if declare -F cleanup_releases >/dev/null; then
+                if ! cleanup_releases; then printf '%s\n' 'Не удалось очистить старые релизы. Повторите очистку на странице проекта.' >&2; fi
+            fi
             rm -f -- "$pid_file"
             {{(credentialsDirectory is null ? ":" : "rm -rf -- " + Quote(credentialsDirectory))}}
             exit "$result"

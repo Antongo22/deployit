@@ -35,6 +35,7 @@ public sealed partial class SshDeploymentService
     public async Task<EnvironmentFileView> SaveEnvironmentAsync(DeploymentProject project, EnvironmentFileInput input,
         CancellationToken ct = default)
     {
+        ValidateStoragePath(project.WorkingDirectory);
         var version = input.Version;
         var prefix = TargetVersion(project) + ":";
         if (version is null || !version.StartsWith(prefix, StringComparison.Ordinal))
@@ -68,6 +69,8 @@ public sealed partial class SshDeploymentService
                 link_file=
                 trap 'rm -f -- "$temporary"; if [ -n "$link_file" ]; then rm -f -- "$link_file"; fi' EXIT
                 mkdir -p -- "$root" || exit 77
+                ( {{MarkStorageRoot(project)}}
+                ) || exit 82
                 (set -o noclobber; cat > "$temporary") || exit 78
                 command -v sha256sum >/dev/null || exit 80
                 received=$(sha256sum -- "$temporary"); received=${received%% *}
@@ -120,6 +123,7 @@ public sealed partial class SshDeploymentService
                 case 79: throw new DomainException("Нет доступа к файлу .deployit.lock в каталоге проекта. SSH-пользователю нужны права записи в этот каталог.");
                 case 80: throw new DomainException("На сервере отсутствует sha256sum. Например, в Debian/Ubuntu установите coreutils: sudo apt-get install coreutils.");
                 case 81: throw new DomainException("На сервере отсутствует flock. Например, в Debian/Ubuntu установите util-linux: sudo apt-get install util-linux.");
+                case 82: throw new DomainException("Каталог принадлежит другому проекту или содержит небезопасные ссылки. Проверьте каталог проекта, releases, current и .deployit-project.", 409);
                 default:
                     if (transferError is not null) throw transferError;
                     throw new DomainException($"Не удалось сохранить .env (код команды: {save.ExitStatus?.ToString() ?? "не получен"}). Проверьте bash и права на каталог проекта. Пример: ls -ld -- {Quote(project.WorkingDirectory)}.");

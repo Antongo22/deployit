@@ -29,6 +29,7 @@ builder.Services.AddSingleton<SecretProtector>();
 builder.Services.AddSingleton<GitProviderService>();
 builder.Services.AddSingleton<ProjectService>();
 builder.Services.AddSingleton<SshDeploymentService>();
+builder.Services.AddSingleton<IProjectStorage>(services => services.GetRequiredService<SshDeploymentService>());
 builder.Services.AddHostedService<DeploymentWorker>();
 builder.Services.AddHttpClient("git", client => {
     client.Timeout = TimeSpan.FromSeconds(30); client.MaxResponseContentBufferSize = 8 * 1024 * 1024;

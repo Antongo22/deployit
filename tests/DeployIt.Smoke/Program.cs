@@ -129,9 +129,24 @@ try {
     var overflow = await page.EvaluateAsync<bool>("document.documentElement.scrollWidth > window.innerWidth");
     Check(!overflow, "Mobile layout fits viewport");
     Check(browserErrors.Count == 0, "Blazor pages have no JavaScript exceptions");
+    await page.GotoAsync(baseUrl + $"/projects/{projectId}"); await Ready();
+    await page.GetByRole(AriaRole.Button, new() { Name = "Очистить старые релизы", Exact = true }).ClickAsync();
+    await Expect(page.GetByText("Старые релизы очищены. Текущий релиз и копии, подключённые к контейнерам, сохранены.")).ToBeVisibleAsync();
+    await Api("POST", $"/api/projects/{projectId}/cleanup", null, HttpStatusCode.NoContent);
+    Check(Directory.Exists("/target-data/smoke/current"), "Cleanup preserves current release over real SSH");
+    var environment = await Api("GET", $"/api/projects/{projectId}/environment");
+    await Api("PUT", $"/api/projects/{projectId}/environment", new { version = environment.GetProperty("version").GetString(), content = "SMOKE_DELETE=1\n" });
+    Check(File.Exists("/target-data/smoke/.env"), "Server environment saved before deletion");
+    await page.GetByRole(AriaRole.Button, new() { Name = "Удалить проект", Exact = true }).ClickAsync();
+    await page.GetByRole(AriaRole.Button, new() { Name = "Да, удалить всё", Exact = true }).ClickAsync();
+    await page.WaitForURLAsync(baseUrl + "/");
+    Check(!Directory.Exists("/target-data/smoke"), "Project deletion removes releases and environment over real SSH");
+    await Api("GET", $"/api/projects/{projectId}", null, HttpStatusCode.NotFound);
+    Check((await Api("GET", $"/api/projects/{projectId}/deployments")).GetArrayLength() == 0, "Project deletion removes history");
+    projectId = null;
     await File.WriteAllTextAsync("/artifacts/smoke-result.json", JsonSerializer.Serialize(new {
         passed = true, firstRun = firstId, commit = first.GetProperty("commitSha").GetString(),
-        failureExitCode = 7, browserErrors, checks = "Blazor UI, GitHub, SSH, queue, history, stderr, release promotion, CSRF, Swagger, mobile" }, new JsonSerializerOptions { WriteIndented = true }));
+        failureExitCode = 7, browserErrors, checks = "Blazor UI, GitHub, SSH, queue, history, stderr, release promotion, CSRF, Swagger, mobile, release cleanup, project deletion" }, new JsonSerializerOptions { WriteIndented = true }));
     Console.WriteLine("PASS: Compose + Blazor + GitHub + real SSH deployment and failure handling.");
 } catch {
     Console.WriteLine("BROWSER ERRORS: " + string.Join("; ", browserErrors));

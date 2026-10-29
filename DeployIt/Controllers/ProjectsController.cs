@@ -16,6 +16,8 @@ public sealed class ProjectsController(ProjectService projects, SshDeploymentSer
         => Ok(await projects.SaveProjectAsync(input, id, ct));
     [HttpDelete("{id:guid}")] public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
     { await projects.DeleteProjectAsync(id, ct); return NoContent(); }
+    [HttpPost("{id:guid}/cleanup")] public async Task<IActionResult> CleanReleases(Guid id, CancellationToken ct)
+    { await projects.CleanReleasesAsync(id, ct); return NoContent(); }
     [HttpPost("{id:guid}/deploy")] public async Task<IActionResult> Deploy(Guid id, CancellationToken ct)
     { var run = await projects.EnqueueAsync(id, ct); return Accepted($"/api/deployments/{run.Id}", run); }
     [HttpPost("{id:guid}/restart")] public async Task<IActionResult> Restart(Guid id, CancellationToken ct)
@@ -29,7 +31,7 @@ public sealed class ProjectsController(ProjectService projects, SshDeploymentSer
     [HttpPut("{id:guid}/environment")]
     [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
     public async Task<EnvironmentFileView> SaveEnvironment(Guid id, EnvironmentFileInput input, CancellationToken ct)
-        => await ssh.SaveEnvironmentAsync(await projects.GetTargetAsync(id, ct), input, ct);
+        => await projects.SaveEnvironmentAsync(id, input, ct);
     [HttpGet("{id:guid}/deployments")] public Task<List<DeploymentView>> History(Guid id, CancellationToken ct)
         => projects.HistoryAsync(id, ct);
     [HttpPost("{id:guid}/check")] public async Task<IActionResult> Check(Guid id, CancellationToken ct)

@@ -7,7 +7,7 @@ using ConnectionInfo = Renci.SshNet.ConnectionInfo;
 
 namespace DeployIt.Services;
 
-public sealed partial class SshDeploymentService(SecretProtector secrets)
+public sealed partial class SshDeploymentService(SecretProtector secrets) : IProjectStorage
 {
     public async Task<string> ProbeAsync(string host, int port, CancellationToken ct = default)
     {
@@ -100,15 +100,19 @@ public sealed partial class SshDeploymentService(SecretProtector secrets)
 
     public static string BuildCommand(DeploymentProject project, Guid runId, bool credentials)
     {
+        ValidateStoragePath(project.WorkingDirectory);
         var credentialDirectory = "/tmp/deployit-" + runId.ToString("N");
         var release = project.WorkingDirectory + "/releases/" + runId.ToString("N");
         var script = $$"""
             {{RunPrelude(project, runId, credentialDirectory)}}
             export GIT_TERMINAL_PROMPT=0
             export GIT_ASKPASS={{Quote(credentials ? credentialDirectory + "/askpass" : "/bin/false")}}
+            {{CheckStorageRoot(project)}}
             mkdir -p -- {{Quote(project.WorkingDirectory + "/releases")}}
             exec 9>{{Quote(project.WorkingDirectory + "/.deployit.lock")}}
             flock -n 9 || { printf '%s\n' 'Другой деплой ещё выполняется на сервере.'; exit 75; }
+            {{MarkStorageRoot(project)}}
+            {{ReleaseCleanupFunction(project)}}
             phase=clone; printf 'DEPLOYIT_STAGE=%s\n' "$phase"
             check_cancel
             printf '%s\n' 'Клонирование выбранной ветки…'

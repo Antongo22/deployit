@@ -69,7 +69,7 @@
         busy = true; error = message = null;
         try
         {
-            loaded = await Ssh.SaveEnvironmentAsync(await Projects.GetTargetAsync(ProjectId, lifetime.Token),
+            loaded = await Projects.SaveEnvironmentAsync(ProjectId,
                 new() { Content = draft, Version = loaded.Version }, lifetime.Token);
             draft = loaded.Content; syncedAt = DateTimeOffset.UtcNow; remoteChanged = confirmReload = false;
             message = ".env сохранён на сервере. Нажмите «Перезапустить», чтобы применить изменения в приложении.";

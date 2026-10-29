@@ -72,8 +72,39 @@ public sealed class DeploymentTests
         var project = await fixture.Service.SaveProjectAsync(input);
         await fixture.Service.EnqueueAsync(project.Id);
         Assert.Equal(409, (await Assert.ThrowsAsync<DomainException>(() => fixture.Service.DeleteProjectAsync(project.Id))).StatusCode);
+        Assert.Equal(409, (await Assert.ThrowsAsync<DomainException>(() => fixture.Service.CleanReleasesAsync(project.Id))).StatusCode);
+        Assert.Equal(0, fixture.Storage.Calls);
         Assert.Equal(409, (await Assert.ThrowsAsync<DomainException>(() => fixture.Service.SaveProjectAsync(input, project.Id))).StatusCode);
         Assert.Equal(409, (await Assert.ThrowsAsync<DomainException>(() => fixture.Service.DeleteConnectionAsync(connection.Id))).StatusCode);
+    }
+
+    [Fact]
+    public async Task DeletionKeepsConfigurationOnRemoteFailureAndCascadesHistoryOnlyAfterSuccess()
+    {
+        using var fixture = new Fixture();
+        var connection = await fixture.Connect();
+        var project = await fixture.Service.SaveProjectAsync(fixture.Input(connection.Id));
+        var run = await fixture.Service.EnqueueAsync(project.Id);
+        await using (var db = fixture.Factory.CreateDbContext()) {
+            (await db.Deployments.FindAsync(run.Id))!.Status = DeploymentStatus.Succeeded;
+            await db.SaveChangesAsync();
+        }
+        fixture.Storage.Fail = true;
+        await Assert.ThrowsAsync<DomainException>(() => fixture.Service.DeleteProjectAsync(project.Id));
+        Assert.Equal(project.Id, (await fixture.Service.ProjectAsync(project.Id)).Id);
+        Assert.Single(await fixture.Service.HistoryAsync(project.Id));
+        fixture.Storage.Fail = false;
+        await fixture.Service.CleanReleasesAsync(project.Id);
+        Assert.Single(await fixture.Service.HistoryAsync(project.Id));
+        await fixture.Service.DeleteProjectAsync(project.Id);
+        await using var after = fixture.Factory.CreateDbContext();
+        Assert.Empty(await after.Projects.ToListAsync());
+        Assert.Empty(await after.Deployments.ToListAsync());
+        Assert.Single(await after.Connections.ToListAsync());
+        Assert.Equal(3, fixture.Storage.Calls);
+        Assert.Equal(run.Id, Assert.Single(fixture.Storage.KnownReleases));
+        Assert.Equal(404, (await Assert.ThrowsAsync<DomainException>(() => fixture.Service.SaveEnvironmentAsync(
+            project.Id, new() { Content = "STALE=1", Version = "old" }))).StatusCode);
     }
 
     [Fact]
@@ -187,6 +218,129 @@ public sealed class DeploymentTests
             var failure = await Shell(SshDeploymentService.BuildCommand(project, Guid.NewGuid(), false));
             Assert.Equal(7, failure.ExitCode); Assert.Contains("FAIL", failure.Output);
             current.Refresh(); Assert.EndsWith(first.ToString("N"), current.LinkTarget);
+            for (var attempt = 0; attempt < 4; attempt++)
+                Assert.Equal(7, (await Shell(SshDeploymentService.BuildCommand(project, Guid.NewGuid(), false))).ExitCode);
+            Assert.Equal(3, Directory.GetDirectories(Path.Combine(project.WorkingDirectory, "releases")).Length);
+            Assert.True(Directory.Exists(Path.Combine(project.WorkingDirectory, "releases", first.ToString("N"))));
+        } finally { Directory.Delete(directory, true); }
+    }
+
+    [LinuxFact]
+    public async Task ManualCleanupSupportsLegacyProjectsAndPreservesUnmanagedFilesAndSymlinks()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "deployit-clean-" + Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(directory, "app's folder");
+        var ids = Enumerable.Range(0, 6).Select(_ => Guid.NewGuid()).ToArray();
+        Directory.CreateDirectory(root);
+        try {
+            for (var i = 0; i < ids.Length; i++) {
+                var release = Path.Combine(root, "releases", ids[i].ToString("N"));
+                Directory.CreateDirectory(release);
+                Directory.SetLastWriteTimeUtc(release, DateTime.UtcNow.AddMinutes(i - 10));
+            }
+            var outside = Path.Combine(directory, "outside"); Directory.CreateDirectory(outside);
+            await File.WriteAllTextAsync(Path.Combine(outside, "keep"), "keep");
+            Directory.CreateSymbolicLink(Path.Combine(root, "current"), Path.Combine(root, "releases", ids[0].ToString("N")));
+            Directory.CreateSymbolicLink(Path.Combine(root, "releases", Guid.NewGuid().ToString("N")), outside);
+            Directory.CreateDirectory(Path.Combine(root, "releases", "user-files"));
+            await File.WriteAllTextAsync(Path.Combine(root, ".env"), "KEEP=1");
+            var project = new DeploymentProject { WorkingDirectory = root, TimeoutMinutes = 1 };
+            var result = await Shell(SshDeploymentService.BuildStorageCommand(project, ids, false));
+            Assert.Equal(0, result.ExitCode);
+            foreach (var index in new[] { 0, 4, 5 }) Assert.True(Directory.Exists(Path.Combine(root, "releases", ids[index].ToString("N"))));
+            foreach (var index in new[] { 1, 2, 3 }) Assert.False(Directory.Exists(Path.Combine(root, "releases", ids[index].ToString("N"))));
+            Assert.True(Directory.Exists(Path.Combine(root, "releases", "user-files")));
+            Assert.Equal("KEEP=1", await File.ReadAllTextAsync(Path.Combine(root, ".env")));
+            Assert.True(File.Exists(Path.Combine(outside, "keep")));
+
+            var mounted = Path.Combine(root, "releases", ids[1].ToString("N"));
+            Directory.CreateDirectory(mounted);
+            Directory.SetLastWriteTimeUtc(mounted, DateTime.UtcNow.AddDays(-1));
+            var bin = Path.Combine(directory, "bin"); Directory.CreateDirectory(bin);
+            var docker = Path.Combine(bin, "docker");
+            await File.WriteAllTextAsync(docker, $$"""
+                #!/bin/bash
+                case "$1" in
+                    ps) printf 'mounted-container\n' ;;
+                    inspect) printf '%s\n' {{SshDeploymentService.Quote(mounted + "/uploads")}} ;;
+                esac
+                """);
+            if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(docker, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            var cleanup = "export PATH=" + SshDeploymentService.Quote(bin) + ":\"$PATH\"; " + SshDeploymentService.BuildStorageCommand(project, ids, false);
+            Assert.Equal(0, (await Shell(cleanup)).ExitCode);
+            Assert.True(Directory.Exists(mounted));
+            // Docker failure must prevent deleting files whose use cannot be checked.
+            await File.WriteAllTextAsync(docker, "#!/bin/bash\nexit 1\n");
+            Assert.NotEqual(0, (await Shell(cleanup)).ExitCode);
+            Assert.True(Directory.Exists(mounted));
+        } finally { Directory.Delete(directory, true); }
+    }
+
+    [Theory]
+    [InlineData("/")]
+    [InlineData("/opt")]
+    [InlineData("/home/user")]
+    [InlineData("/var/lib")]
+    [InlineData("/var/lib/docker")]
+    [InlineData("/etc/my-app")]
+    [InlineData("/opt/../apps")]
+    public void StorageCleanupRejectsSystemDirectories(string root)
+        => Assert.Throws<DomainException>(() => SshDeploymentService.BuildStorageCommand(
+            new DeploymentProject { WorkingDirectory = root }, [], true));
+
+    [LinuxFact]
+    public async Task DeletionRejectsUnownedRootsAndLinksOutsideProject()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "deployit-guard-" + Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(directory, "project"); Directory.CreateDirectory(root);
+        try {
+            await File.WriteAllTextAsync(Path.Combine(root, "keep"), "keep");
+            var project = new DeploymentProject { WorkingDirectory = root, TimeoutMinutes = 1 };
+            Assert.Equal(77, (await Shell(SshDeploymentService.BuildStorageCommand(project, [], true))).ExitCode);
+            Assert.True(File.Exists(Path.Combine(root, "keep")));
+            await File.WriteAllTextAsync(Path.Combine(root, ".deployit-project"), project.Id.ToString("N"));
+            Directory.CreateSymbolicLink(Path.Combine(root, "releases"), directory);
+            Assert.Equal(76, (await Shell(SshDeploymentService.BuildStorageCommand(project, [], true))).ExitCode);
+            Directory.Delete(Path.Combine(root, "releases"));
+            Directory.CreateSymbolicLink(Path.Combine(root, "current"), directory);
+            Assert.Equal(76, (await Shell(SshDeploymentService.BuildStorageCommand(project, [], true))).ExitCode);
+            Assert.True(File.Exists(Path.Combine(root, "keep")));
+        } finally { Directory.Delete(directory, true); }
+    }
+
+    [LinuxFact]
+    public async Task DeletionRemovesOnlyLabeledDockerResourcesAndProjectDirectory()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "deployit-delete-" + Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(directory, "project"); Directory.CreateDirectory(root);
+        var bin = Path.Combine(directory, "bin"); Directory.CreateDirectory(bin);
+        try {
+            var project = new DeploymentProject { WorkingDirectory = root, TimeoutMinutes = 1 };
+            await File.WriteAllTextAsync(Path.Combine(root, ".deployit-project"), project.Id.ToString("N"));
+            await File.WriteAllTextAsync(Path.Combine(root, ".env"), "DELETE=1");
+            var log = Path.Combine(directory, "docker.log");
+            var docker = Path.Combine(bin, "docker");
+            await File.WriteAllTextAsync(docker, $$"""
+                #!/bin/bash
+                printf '%s\n' "$*" >> {{SshDeploymentService.Quote(log)}}
+                case "$1:$2" in
+                    ps:-aq) printf 'owned-container\n' ;;
+                    network:ls) printf 'owned-network\n' ;;
+                    volume:ls) printf 'owned-volume\n' ;;
+                esac
+                """);
+            if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(docker, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            var command = "export PATH=" + SshDeploymentService.Quote(bin) + ":\"$PATH\"; " + SshDeploymentService.BuildStorageCommand(project, [], true);
+            Assert.Equal(0, (await Shell(command)).ExitCode);
+            Assert.False(Directory.Exists(root));
+            var output = await File.ReadAllTextAsync(log);
+            Assert.Contains("label=com.docker.compose.project=deployit-" + project.Id.ToString("N"), output);
+            Assert.Contains("rm -fv owned-container", output);
+            Assert.Contains("network rm owned-network", output);
+            Assert.Contains("volume rm owned-volume", output);
+            Assert.DoesNotContain("prune", output);
+            // A retry after filesystem deletion still clears any remaining project Docker resources.
+            Assert.Equal(0, (await Shell(command)).ExitCode);
         } finally { Directory.Delete(directory, true); }
     }
 
@@ -205,13 +359,14 @@ public sealed class DeploymentTests
         public TestFactory Factory { get; }
         public SecretProtector Secrets { get; }
         public ProjectService Service { get; }
+        public FakeStorage Storage { get; } = new();
         private readonly string key;
         public Fixture() {
             Directory.CreateDirectory(path);
             Factory = new(new DbContextOptionsBuilder<DeployItDbContext>().UseSqlite($"Data Source={path}/test.db;Default Timeout=30").Options);
             using var db = Factory.CreateDbContext(); db.Database.EnsureCreated();
             Secrets = new(DataProtectionProvider.Create(new DirectoryInfo(Path.Combine(path, "keys"))));
-            Service = new(Factory, new GitProviderService(new ClientFactory(), Secrets), Secrets);
+            Service = new(Factory, new GitProviderService(new ClientFactory(), Secrets), Secrets, Storage);
             using var rsa = RSA.Create(2048); key = rsa.ExportRSAPrivateKeyPem();
         }
         public Task<ConnectionView> Connect() => Service.AddConnectionAsync(new ConnectionInput {
@@ -220,6 +375,23 @@ public sealed class DeploymentTests
             RepositoryId = "1", Host = "server", Branch = "main", PrivateKey = key,
             HostFingerprint = "SHA256:" + Convert.ToBase64String(SHA256.HashData([1])).TrimEnd('=') };
         public void Dispose() { Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools(); Directory.Delete(path, true); }
+    }
+    private sealed class FakeStorage : IProjectStorage
+    {
+        public int Calls { get; private set; }
+        public bool Fail { get; set; }
+        public IReadOnlyCollection<Guid> KnownReleases { get; private set; } = [];
+        public Task<EnvironmentFileView> SaveEnvironmentAsync(DeploymentProject project, EnvironmentFileInput input, CancellationToken ct)
+            => Task.FromResult(new EnvironmentFileView(project.WorkingDirectory + "/.env", true, input.Content, input.Version));
+        public Task CleanReleasesAsync(DeploymentProject project, IReadOnlyCollection<Guid> knownReleases, CancellationToken ct)
+            => DeleteAsync(project, knownReleases, ct);
+        public Task DeleteAsync(DeploymentProject project, IReadOnlyCollection<Guid> knownReleases, CancellationToken ct)
+        {
+            Calls++;
+            KnownReleases = knownReleases;
+            if (Fail) throw new DomainException("SSH unavailable", 409);
+            return Task.CompletedTask;
+        }
     }
     private sealed class ClientFactory : IHttpClientFactory
     {

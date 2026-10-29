@@ -10,7 +10,7 @@ using Renci.SshNet;
 namespace DeployIt.Services;
 
 public sealed class ProjectService(IDbContextFactory<DeployItDbContext> factory,
-    GitProviderService git, SecretProtector secrets)
+    GitProviderService git, SecretProtector secrets, IProjectStorage storage)
 {
     public async Task<List<ConnectionView>> ConnectionsAsync(CancellationToken ct = default)
     {
@@ -193,8 +193,36 @@ public sealed class ProjectService(IDbContextFactory<DeployItDbContext> factory,
         if (await db.Deployments.AnyAsync(d => d.ProjectId == id &&
             (d.Status == DeploymentStatus.Queued || d.Status == DeploymentStatus.Running), ct))
             throw new DomainException("Дождитесь завершения деплоя.", 409);
+        var releases = await db.Deployments.Where(d => d.ProjectId == id && d.Operation == DeploymentOperation.Deploy)
+            .Select(d => d.Id).ToListAsync(ct);
+        await storage.DeleteAsync(project, releases, ct);
         db.Remove(project);
         await db.SaveChangesAsync(ct);
+    }
+
+    public async Task CleanReleasesAsync(Guid id, CancellationToken ct = default)
+    {
+        await mutationGate.WaitAsync(ct);
+        try
+        {
+            await using var db = await factory.CreateDbContextAsync(ct);
+            var project = await db.Projects.FindAsync([id], ct) ?? throw new DomainException("Проект не найден.", 404);
+            if (await db.Deployments.AnyAsync(d => d.ProjectId == id &&
+                (d.Status == DeploymentStatus.Queued || d.Status == DeploymentStatus.Running), ct))
+                throw new DomainException("Дождитесь завершения запуска перед очисткой релизов.", 409);
+            var releases = await db.Deployments.Where(d => d.ProjectId == id && d.Operation == DeploymentOperation.Deploy)
+                .Select(d => d.Id).ToListAsync(ct);
+            await storage.CleanReleasesAsync(project, releases, ct);
+        }
+        finally { mutationGate.Release(); }
+    }
+
+    public async Task<EnvironmentFileView> SaveEnvironmentAsync(Guid id, EnvironmentFileInput input, CancellationToken ct = default)
+    {
+        // Prevent a stale editor from recreating the directory while deletion is in progress.
+        await mutationGate.WaitAsync(ct);
+        try { return await storage.SaveEnvironmentAsync(await GetTargetAsync(id, ct), input, ct); }
+        finally { mutationGate.Release(); }
     }
 
     public async Task<DeploymentView> EnqueueAsync(Guid projectId, CancellationToken ct = default)
