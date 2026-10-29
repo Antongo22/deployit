@@ -62,20 +62,23 @@ public sealed partial class SshDeploymentService
         }
     }
 
-    private static string ReleaseUsageFunctions(DeploymentProject project) => $$"""
+    private const string ReleaseUsageFunctions = """
         load_release_usage() {
             mounted_paths=
             if command -v docker >/dev/null; then
-                container_ids=$(docker ps -aq --filter {{Quote("label=com.docker.compose.project=deployit-" + project.Id.ToString("N"))}}) || return 1
+                # A bind mount may belong to a manually named Compose project.
+                container_ids=$(docker ps -aq) || return 1
                 if [ -n "$container_ids" ]; then
-                    mounted_paths=$(docker inspect --format {{Quote("{{range .Mounts}}{{println .Source}}{{end}}")}} $container_ids) || return 1
+                    mounted_paths=$(docker inspect --format '{{range .Mounts}}{{println .Source}}{{end}}' $container_ids) || return 1
                 fi
             fi
         }
         release_in_use() {
             local source
             while IFS= read -r source; do
+                [ -n "$source" ] || continue
                 case "$source" in "$1"|"$1"/*) return 0 ;; esac
+                case "$1" in "$source"/*) return 0 ;; esac
             done <<< "$mounted_paths"
             return 1
         }
@@ -131,7 +134,7 @@ public sealed partial class SshDeploymentService
             flock -n 9 || exit 75
             current_path=
             if [ -L "$root/current" ]; then current_path=$(readlink -m -- "$root/current"); fi
-            {{ReleaseUsageFunctions(project)}}
+            {{ReleaseUsageFunctions}}
             load_release_usage || exit 78
             {{action}}
             """;
@@ -187,7 +190,7 @@ public sealed partial class SshDeploymentService
             [ -d "$root/releases" ] || return 0
             current_path=
             if [ -L "$root/current" ]; then current_path=$(readlink -m -- "$root/current"); fi
-            {{ReleaseUsageFunctions(project)}}
+            {{ReleaseUsageFunctions}}
             load_release_usage || return 1
             kept=0
             if [ -n "$current_path" ] && [ -d "$current_path" ]; then kept=1; fi

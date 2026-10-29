@@ -390,7 +390,7 @@ public sealed class DeploymentTests
             await File.WriteAllTextAsync(docker, $$"""
                 #!/bin/bash
                 case "$1" in
-                    ps) printf 'fixture-container\n' ;;
+                    ps) case "$*" in *--filter*) exit 99 ;; esac; printf 'fixture-container\n' ;;
                     inspect) printf '%s\n' {{SshDeploymentService.Quote(Path.Combine(root, "releases", ids[1].ToString("N"), "uploads"))}} ;;
                 esac
                 """);
@@ -412,6 +412,16 @@ public sealed class DeploymentTests
             Assert.Equal(81, (await Shell(Command(ids[2]))).ExitCode);
             Assert.Equal("KEEP=1", await File.ReadAllTextAsync(Path.Combine(root, ".env")));
             Assert.True(Directory.Exists(Path.Combine(root, "releases", "user-files")));
+            await File.WriteAllTextAsync(docker, $$"""
+                #!/bin/bash
+                case "$1" in
+                    ps) printf 'container-with-parent-mount\n' ;;
+                    inspect) printf '%s\n' {{SshDeploymentService.Quote(root)}} ;;
+                esac
+                """);
+            using var parentMount = JsonDocument.Parse((await Shell(Command(null))).Output);
+            Assert.All(parentMount.RootElement.EnumerateArray(), row => Assert.True(row.GetProperty("inUse").GetBoolean()));
+            Assert.Equal(80, (await Shell(Command(ids[1]))).ExitCode);
         } finally { Directory.Delete(directory, true); }
     }
 
