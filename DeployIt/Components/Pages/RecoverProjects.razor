@@ -1,0 +1,74 @@
+@page "/projects/recover"
+@attribute [Authorize]
+@implements IDisposable
+@inject ProjectService Service
+@inject SshDeploymentService Ssh
+<PageTitle>Восстановление проектов · DeployIt</PageTitle>
+<a class="back-link" href="/">← К проектам</a>
+<div class="page-heading"><div><div class="eyebrow">ПРОЕКТЫ НА СЕРВЕРЕ</div><h1>Восстановить проекты<span class="heading-dot">.</span></h1><p class="muted">Укажите SSH-подключение — найденные проекты DeployIt появятся в панели.</p></div></div>
+<p class="alert warning">Поиск только читает сервер. Приложения продолжают работать; деплой, перезапуск, очистка и изменение .env не выполняются. Прежние ID проектов сохраняются. Перед первым запуском нужно проверить настройки восстановленного проекта.</p>
+@if (error is not null) { <div class="alert error" role="alert">@error</div> }
+<EditForm Model="input" OnValidSubmit="Recover" FormName="recover-projects">
+    <DataAnnotationsValidator /><ValidationSummary />
+    <fieldset disabled="@busy" class="recovery-fields">
+        <div class="editor-grid">
+            <section class="panel">
+                <h2>SSH-подключение</h2>
+                <div class="fields-row host-port"><label>Адрес сервера<InputText @bind-Value="input.Host" placeholder="192.0.2.10 или app.example.com" /></label><label>Порт<InputNumber @bind-Value="input.Port" /></label></div>
+                <label>SSH-пользователь<InputText @bind-Value="input.Username" /></label>
+                <label>Способ входа по SSH<InputSelect @bind-Value="input.AuthenticationType" @bind-Value:after="ClearCredentials"><option value="@SshAuthenticationType.Password">Логин и пароль</option><option value="@SshAuthenticationType.PrivateKey">SSH-ключ</option></InputSelect></label>
+                @if (input.AuthenticationType == SshAuthenticationType.Password) {
+                    <label>Пароль SSH-пользователя<InputText type="password" @bind-Value="input.Password" autocomplete="new-password" /></label>
+                } else {
+                    <label>Приватный SSH-ключ<InputTextArea class="mono" @bind-Value="input.PrivateKey" rows="6" /></label>
+                    <label>Пароль SSH-ключа<InputText type="password" @bind-Value="input.Passphrase" autocomplete="new-password" /></label>
+                }
+            </section>
+            <section class="panel">
+                <h2>Где искать</h2>
+                <label>Каталог поиска<InputText class="mono" @bind-Value="input.SearchDirectory" /><small>По умолчанию /opt. Можно повторить поиск в /srv, /var/www или домашнем каталоге. Глубина — 8 уровней, до 200 каталогов, до 60 секунд.</small></label>
+                <label>Отпечаток SSH-ключа сервера<InputText class="mono" @bind-Value="input.HostFingerprint" placeholder="SHA256:…" /></label>
+                <button class="button" type="button" disabled="@probing" @onclick="Probe">@(probing ? "Подключаемся…" : "Получить отпечаток")</button>
+                <p class="form-note">Сверьте отпечаток на сервере: <code>ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub</code>.</p>
+                <p class="form-note">Для поиска Git-токен не нужен. Для последующего деплоя приватного репозитория добавьте Git-подключение с токеном и выберите его в настройках проекта. История запусков и утраченные секреты из локальной базы не восстанавливаются.</p>
+            </section>
+        </div>
+        <div class="editor-actions"><button class="button primary" type="submit" disabled="@probing">@(busy ? "Ищем и подключаем…" : "Найти и подключить проекты")</button></div>
+    </fieldset>
+</EditForm>
+@if (result is not null) {
+    <section class="panel">
+        <h2>Результат поиска</h2>
+        <p role="status">Добавлено проектов: @result.Projects.Count(p => p.Added).</p>
+        @foreach (var warning in result.Warnings) { <div class="alert warning">@warning</div> }
+        @if (result.Projects.Count == 0) { <p class="muted">Проекты DeployIt в этом каталоге не найдены. Проверьте каталог поиска и права SSH-пользователя. Для старых проектов без маркера нужны доступные Docker-метки и ссылка current.</p> }
+        @foreach (var project in result.Projects) {
+            <div class="connection-item"><strong class="mono">@project.WorkingDirectory</strong><p>@project.Message</p>
+                @if (project.Id.HasValue) { <a class="button" href="@($"/projects/{project.Id}")">Открыть проект</a> }
+            </div>
+        }
+    </section>
+}
+@code {
+    private RecoveryInput input = new();
+    private RecoveryResult? result;
+    private string? error;
+    private bool busy, probing;
+    private readonly CancellationTokenSource lifetime = new();
+    private void ClearCredentials() => input.Password = input.PrivateKey = input.Passphrase = "";
+    private async Task Probe() {
+        probing = true; error = null;
+        try { input.HostFingerprint = await Ssh.ProbeAsync(input.Host, input.Port, lifetime.Token); }
+        catch (OperationCanceledException) { }
+        catch (Exception e) { error = Ui.Error(e); }
+        finally { probing = false; }
+    }
+    private async Task Recover() {
+        busy = true; error = null; result = null;
+        try { result = await Service.RecoverProjectsAsync(input, Ssh, lifetime.Token); ClearCredentials(); }
+        catch (OperationCanceledException) { }
+        catch (Exception e) { error = Ui.Error(e); }
+        finally { busy = false; }
+    }
+    public void Dispose() { lifetime.Cancel(); lifetime.Dispose(); }
+}

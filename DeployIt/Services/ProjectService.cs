@@ -9,7 +9,7 @@ using Renci.SshNet;
 
 namespace DeployIt.Services;
 
-public sealed class ProjectService(IDbContextFactory<DeployItDbContext> factory,
+public sealed partial class ProjectService(IDbContextFactory<DeployItDbContext> factory,
     GitProviderService git, SecretProtector secrets, IProjectStorage storage)
 {
     public async Task<List<ConnectionView>> ConnectionsAsync(CancellationToken ct = default)
@@ -183,6 +183,7 @@ public sealed class ProjectService(IDbContextFactory<DeployItDbContext> factory,
         project.DeployCommand = input.DeployCommand; project.RestartCommand = input.RestartCommand;
         project.StopCommand = input.StopCommand;
         project.TimeoutMinutes = input.TimeoutMinutes;
+        project.RequiresReview = false;
         if (!id.HasValue) db.Projects.Add(project);
         try { await db.SaveChangesAsync(ct); }
         catch (DbUpdateException) { throw new DomainException("Репозиторий или каталог на этом сервере уже занят другим проектом.", 409); }
@@ -199,6 +200,7 @@ public sealed class ProjectService(IDbContextFactory<DeployItDbContext> factory,
     {
         await using var db = await factory.CreateDbContextAsync(ct);
         var project = await db.Projects.FindAsync([id], ct) ?? throw new DomainException("Проект не найден.", 404);
+        RequireReviewed(project);
         if (await db.Deployments.AnyAsync(d => d.ProjectId == id &&
             (d.Status == DeploymentStatus.Queued || d.Status == DeploymentStatus.Running), ct))
             throw new DomainException("Дождитесь завершения деплоя.", 409);
@@ -216,6 +218,7 @@ public sealed class ProjectService(IDbContextFactory<DeployItDbContext> factory,
         {
             await using var db = await factory.CreateDbContextAsync(ct);
             var project = await db.Projects.FindAsync([id], ct) ?? throw new DomainException("Проект не найден.", 404);
+            RequireReviewed(project);
             if (await db.Deployments.AnyAsync(d => d.ProjectId == id &&
                 (d.Status == DeploymentStatus.Queued || d.Status == DeploymentStatus.Running), ct))
                 throw new DomainException("Дождитесь завершения запуска перед очисткой релизов.", 409);
@@ -248,6 +251,7 @@ public sealed class ProjectService(IDbContextFactory<DeployItDbContext> factory,
         {
             await using var db = await factory.CreateDbContextAsync(ct);
             var project = await db.Projects.FindAsync([id], ct) ?? throw new DomainException("Проект не найден.", 404);
+            RequireReviewed(project);
             if (await db.Deployments.AnyAsync(d => d.ProjectId == id &&
                 (d.Status == DeploymentStatus.Queued || d.Status == DeploymentStatus.Running), ct))
                 throw new DomainException("Дождитесь завершения запуска перед удалением релиза.", 409);
@@ -262,7 +266,11 @@ public sealed class ProjectService(IDbContextFactory<DeployItDbContext> factory,
     {
         // Prevent a stale editor from recreating the directory while deletion is in progress.
         await mutationGate.WaitAsync(ct);
-        try { return await storage.SaveEnvironmentAsync(await GetTargetAsync(id, ct), input, ct); }
+        try {
+            var project = await GetTargetAsync(id, ct);
+            RequireReviewed(project);
+            return await storage.SaveEnvironmentAsync(project, input, ct);
+        }
         finally { mutationGate.Release(); }
     }
 
@@ -290,6 +298,7 @@ public sealed class ProjectService(IDbContextFactory<DeployItDbContext> factory,
         await using var db = await factory.CreateDbContextAsync(ct);
         var project = await db.Projects.AsNoTracking().Include(p => p.Connection).FirstOrDefaultAsync(p => p.Id == projectId, ct)
             ?? throw new DomainException("Проект не найден.", 404);
+        RequireReviewed(project);
         if (await db.Deployments.AnyAsync(d => d.ProjectId == projectId &&
             (d.Status == DeploymentStatus.Queued || d.Status == DeploymentStatus.Running), ct))
             throw new DomainException("Деплой, перезапуск или остановка этого проекта уже в очереди или выполняется. Дождитесь завершения или прервите текущий запуск.", 409);
@@ -355,7 +364,7 @@ public sealed class ProjectService(IDbContextFactory<DeployItDbContext> factory,
     private static ConnectionView View(GitConnection c) => new(c.Id, c.Name, c.Provider, c.BaseUrl, c.Account, c.PublicOnly);
     private static ProjectView View(DeploymentProject p, DeploymentView? run, DeploymentView? successful = null) => new(p.Id, p.Name, p.ConnectionId,
         p.RepositoryId, p.RepositoryName, p.RepositoryUrl, p.Branch, p.Host, p.Port, p.Username,
-        p.HostFingerprint, p.WorkingDirectory, p.DeployCommand, p.TimeoutMinutes, run, successful, p.AuthenticationType, p.RestartCommand, p.StopCommand);
+        p.HostFingerprint, p.WorkingDirectory, p.DeployCommand, p.TimeoutMinutes, run, successful, p.AuthenticationType, p.RestartCommand, p.StopCommand, p.RequiresReview);
     public static DeploymentView View(Deployment d, bool log = false) => new(d.Id, d.ProjectId, d.Status,
         d.CreatedAt, d.StartedAt, d.FinishedAt, d.CommitSha, d.ExitCode, log ? d.Log : null, d.Operation,
         DeploymentDiagnostics.StageName(log && d.Stage == "" ? DeploymentDiagnostics.InferStage(d.Log) : d.Stage), d.ErrorMessage ?? (log && d.Status == DeploymentStatus.Failed

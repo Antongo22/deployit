@@ -6,7 +6,7 @@
         <div><h2>Релизы на сервере</h2><small class="muted">@(releases is null ? "Копии кода в каталоге releases" : $"Копий: {releases.Count} · На диске: {Size(releases.Sum(r => r.SizeBytes))}")</small></div>
         <div class="inline-actions">
             <button class="button" disabled="@(busy || Active)" @onclick="Refresh">@(busy ? "Обрабатываем…" : "Обновить список")</button>
-            <button class="button" disabled="@(busy || Active)" @onclick="Clean">Очистить старые релизы</button>
+            <button class="button" disabled="@(ReadOnly || busy || Active)" @onclick="Clean">Очистить старые релизы</button>
         </div>
     </div>
     <p class="form-note">Автоматически сохраняются @SshDeploymentService.ReleasesToKeep релиза, включая текущий. Копии, подключённые к контейнерам, сохраняются дополнительно. Отдельный неиспользуемый релиз можно удалить вручную.</p>
@@ -22,7 +22,7 @@
                 <td><code title="@release.Id.ToString("N")">@release.Id.ToString("N")[..12]</code></td>
                 <td>@Ui.Time(release.ModifiedAt)</td><td>@Size(release.SizeBytes)</td>
                 <td>@if (release.IsCurrent) { <span class="tag">Текущий</span> } else if (release.InUse) { <span class="tag">Используется контейнером</span> } else { <span class="muted">Не используется</span> }</td>
-                <td><button class="button danger subtle" disabled="@(busy || Active || release.IsCurrent || release.InUse)" @onclick="() => confirmDelete = release.Id">Удалить релиз</button></td>
+                <td><button class="button danger subtle" disabled="@(ReadOnly || busy || Active || release.IsCurrent || release.InUse)" @onclick="() => confirmDelete = release.Id">Удалить релиз</button></td>
             </tr>
         }
         </tbody></table></div>
@@ -31,7 +31,7 @@
     @if (releases?.FirstOrDefault(r => r.Id == confirmDelete) is { } selected)
     {
         <div class="alert warning">Удалить релиз <code>@selected.Id.ToString("N")</code> (@Size(selected.SizeBytes))? Файлы этой копии будут удалены безвозвратно. История запусков сохранится.
-            <div class="inline-actions"><button class="button danger" disabled="@(busy || Active)" @onclick="() => Delete(selected)">Да, удалить релиз</button><button class="button" disabled="@busy" @onclick="() => confirmDelete = null">Отмена</button></div>
+            <div class="inline-actions"><button class="button danger" disabled="@(ReadOnly || busy || Active)" @onclick="() => Delete(selected)">Да, удалить релиз</button><button class="button" disabled="@busy" @onclick="() => confirmDelete = null">Отмена</button></div>
         </div>
     }
 </section>
@@ -39,6 +39,7 @@
 @code {
     [Parameter] public Guid ProjectId { get; set; }
     [Parameter] public bool Active { get; set; }
+    [Parameter] public bool ReadOnly { get; set; }
     private List<ReleaseView>? releases;
     private Guid? loadedFor, confirmDelete;
     private string? error, message;

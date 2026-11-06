@@ -19,7 +19,7 @@
         }
         else if (busy) { <p class="muted">Загружаем .env через SFTP…</p> }
         <div class="inline-actions env-actions">
-            <button class="button primary" disabled="@(busy || syncing || loaded is null || (!Dirty && loaded.Exists))" @onclick="Save">@(busy ? "Синхронизация…" : "Сохранить на сервер")</button>
+            <button class="button primary" disabled="@(ReadOnly || busy || syncing || loaded is null || (!Dirty && loaded.Exists))" @onclick="Save">@(busy ? "Синхронизация…" : "Сохранить на сервер")</button>
             <button class="button" disabled="@(busy || syncing)" @onclick="Reload">Загрузить с сервера</button>
         </div>
         @if (confirmReload)
@@ -33,6 +33,7 @@
 
 @code {
     [Parameter] public Guid ProjectId { get; set; }
+    [Parameter] public bool ReadOnly { get; set; }
     [Parameter] public string WorkingDirectory { get; set; } = "";
     private bool opened, busy, syncing, remoteChanged, confirmReload;
     private string draft = "";

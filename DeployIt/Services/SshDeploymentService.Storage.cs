@@ -179,6 +179,10 @@ public sealed partial class SshDeploymentService
         if [ ! -e "$root/.deployit-project" ]; then
             (umask 077; set -o noclobber; printf '%s\n' {{Quote(project.Id.ToString("N"))}} > "$root/.deployit-project")
         fi
+        metadata_tmp=$(mktemp "$root/.deployit-project.json.XXXXXX")
+        (umask 077; printf '%s\n' {{Quote(JsonSerializer.Serialize(RecoveryMetadata.From(project)))}} > "$metadata_tmp")
+        chmod 600 -- "$metadata_tmp"
+        mv -fT -- "$metadata_tmp" "$root/.deployit-project.json"
         """;
 
     // Runs while holding .deployit.lock, including from the deployment's EXIT trap.

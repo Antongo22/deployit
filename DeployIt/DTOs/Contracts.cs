@@ -62,7 +62,23 @@ public sealed record ProjectView(Guid Id, string Name, Guid ConnectionId, string
     DeploymentView? LatestDeployment, DeploymentView? LastSuccessfulDeployment = null,
     SshAuthenticationType AuthenticationType = SshAuthenticationType.PrivateKey,
     string RestartCommand = "docker compose up -d --force-recreate --no-build",
-    string StopCommand = "docker compose stop");
+    string StopCommand = "docker compose stop", bool RequiresReview = false);
+
+public sealed class RecoveryInput
+{
+    [Required, StringLength(253)] public string Host { get; set; } = "";
+    [Range(1, 65535)] public int Port { get; set; } = 22;
+    [Required, StringLength(100)] public string Username { get; set; } = "root";
+    [Required, StringLength(100)] public string HostFingerprint { get; set; } = "";
+    public SshAuthenticationType AuthenticationType { get; set; } = SshAuthenticationType.Password;
+    [StringLength(1000)] public string Password { get; set; } = "";
+    [StringLength(20000)] public string PrivateKey { get; set; } = "";
+    [StringLength(500)] public string Passphrase { get; set; } = "";
+    [Required, StringLength(500)] public string SearchDirectory { get; set; } = "/opt";
+}
+
+public sealed record RecoveredProjectView(Guid? Id, string WorkingDirectory, string Message, bool Added);
+public sealed record RecoveryResult(List<RecoveredProjectView> Projects, List<string> Warnings);
 
 public sealed class EnvironmentFileInput
 {

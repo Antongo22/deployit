@@ -41,6 +41,7 @@ public sealed class DeploymentProject
     public string RestartCommand { get; set; } = "docker compose up -d --force-recreate --no-build";
     public string StopCommand { get; set; } = "docker compose stop";
     public int TimeoutMinutes { get; set; } = 20;
+    public bool RequiresReview { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public List<Deployment> Deployments { get; set; } = [];
 }

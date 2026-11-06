@@ -42,4 +42,6 @@ public sealed class ProjectsController(ProjectService projects, SshDeploymentSer
         => Ok(new { message = await ssh.CheckAsync(await projects.GetTargetAsync(id, ct), ct) });
     [HttpPost("probe-host")] public async Task<IActionResult> Probe(HostProbeInput input, CancellationToken ct)
         => Ok(new { fingerprint = await ssh.ProbeAsync(input.Host, input.Port, ct) });
+    [HttpPost("recover")] public Task<RecoveryResult> Recover(RecoveryInput input, CancellationToken ct)
+        => projects.RecoverProjectsAsync(input, ssh, ct);
 }

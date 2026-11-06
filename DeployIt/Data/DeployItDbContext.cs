@@ -35,6 +35,8 @@ public sealed class DeployItDbContext(DbContextOptions<DeployItDbContext> option
             await Database.ExecuteSqlRawAsync("ALTER TABLE \"Projects\" ADD COLUMN \"RestartCommand\" TEXT NOT NULL DEFAULT 'docker compose up -d --force-recreate --no-build';", ct);
         if (!columns.Contains("StopCommand"))
             await Database.ExecuteSqlRawAsync("ALTER TABLE \"Projects\" ADD COLUMN \"StopCommand\" TEXT NOT NULL DEFAULT 'docker compose stop';", ct);
+        if (!columns.Contains("RequiresReview"))
+            await Database.ExecuteSqlRawAsync("ALTER TABLE \"Projects\" ADD COLUMN \"RequiresReview\" INTEGER NOT NULL DEFAULT 0;", ct);
         await using (var command = Database.GetDbConnection().CreateCommand())
         {
             command.Transaction = transaction.GetDbTransaction();
@@ -64,6 +66,7 @@ public sealed class DeployItDbContext(DbContextOptions<DeployItDbContext> option
         model.Entity<DeploymentProject>().Property(p => p.ProtectedPassword).HasDefaultValue("");
         model.Entity<DeploymentProject>().Property(p => p.RestartCommand).HasDefaultValue("docker compose up -d --force-recreate --no-build");
         model.Entity<DeploymentProject>().Property(p => p.StopCommand).HasDefaultValue("docker compose stop");
+        model.Entity<DeploymentProject>().Property(p => p.RequiresReview).HasDefaultValue(false);
         model.Entity<Deployment>().Property(d => d.Operation).HasDefaultValue(DeploymentOperation.Deploy);
         model.Entity<DeploymentProject>().HasIndex(p => p.RepositoryUrl).IsUnique();
         model.Entity<DeploymentProject>().HasIndex(p => new { p.Host, p.Port, p.WorkingDirectory }).IsUnique();

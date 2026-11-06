@@ -562,7 +562,7 @@ public sealed class DeploymentTests
         await process.WaitForExitAsync(); return (process.ExitCode, await stdout + await stderr);
     }
 
-    private sealed class Fixture : IDisposable
+    internal sealed class Fixture : IDisposable
     {
         private readonly string path = Path.Combine(Path.GetTempPath(), "deployit-tests-" + Guid.NewGuid().ToString("N"));
         public TestFactory Factory { get; }
@@ -585,7 +585,7 @@ public sealed class DeploymentTests
             HostFingerprint = "SHA256:" + Convert.ToBase64String(SHA256.HashData([1])).TrimEnd('=') };
         public void Dispose() { Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools(); Directory.Delete(path, true); }
     }
-    private sealed class FakeStorage : IProjectStorage
+    internal sealed class FakeStorage : IProjectStorage
     {
         public int Calls { get; private set; }
         public bool Fail { get; set; }

@@ -8,6 +8,7 @@
 <a class="back-link" href="@(Id.HasValue ? $"/projects/{Id}" : "/")">← К проектам</a>
 <div class="page-heading"><div><div class="eyebrow">НАСТРОЙТЕ ОДИН РАЗ</div><h1>@(Id.HasValue ? "Настройки проекта" : "Новый проект")<span class="heading-dot">.</span></h1><p class="muted">Свяжите репозиторий с сервером и задайте команду деплоя.</p></div></div>
 @if (error is not null) { <div class="alert error" role="alert">@error</div> }
+@if (recovered) { <p class="alert warning">Это проект, восстановленный с сервера. Проверьте команды: для старых проектов предложены стандартные команды Docker Compose. Выберите Git-подключение с доступом к репозиторию. Сохранение настроек разрешит управление проектом, но не запустит деплой.</p> }
 @if (loading) { <div class="empty">Загрузка настроек…</div> }
 else if (connections.Count == 0) { <div class="empty"><h2>Сначала подключите Git-сервис</h2><a href="/connections" class="button primary">Подключить GitHub / GitLab</a></div> }
 else
@@ -56,6 +57,8 @@ else
     private List<ConnectionView> connections = [];
     private List<RepositoryView> repositories = [];
     private bool busy, probing, repositoriesLoading, loading = true;
+    private bool recovered;
+    private string? recoveredRepositoryUrl;
     private string? error;
     private SshAuthenticationType? savedAuthenticationType;
     private bool HasSavedCredentials => Id.HasValue && savedAuthenticationType == input.AuthenticationType;
@@ -65,6 +68,7 @@ else
             connections = await Service.ConnectionsAsync();
             if (Id.HasValue) {
                 var p = await Service.ProjectAsync(Id.Value);
+                recovered = p.RequiresReview; recoveredRepositoryUrl = p.RepositoryUrl;
                 savedAuthenticationType = p.AuthenticationType;
                 input = new() { Name = p.Name, ConnectionId = p.ConnectionId, RepositoryId = p.RepositoryId,
                     Branch = p.Branch, Host = p.Host, Port = p.Port, Username = p.Username,
@@ -76,7 +80,11 @@ else
         } catch (Exception e) { error = Ui.Error(e); } finally { loading = false; }
     }
     private async Task LoadRepositories() { repositoriesLoading = true;
-        try { repositories = await Service.RepositoriesAsync(input.ConnectionId); }
+        try {
+            repositories = await Service.RepositoriesAsync(input.ConnectionId);
+            if (recovered && string.IsNullOrEmpty(input.RepositoryId))
+                input.RepositoryId = repositories.FirstOrDefault(r => r.CloneUrl == recoveredRepositoryUrl)?.Id ?? "";
+        }
         catch (Exception e) { repositories = []; error = Ui.Error(e); } finally { repositoriesLoading = false; }
     }
     private async Task ConnectionChanged() { input.RepositoryId = ""; error = null; await LoadRepositories(); }
