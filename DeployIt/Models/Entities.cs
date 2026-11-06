@@ -64,6 +64,8 @@ public sealed class Deployment
     public string Stage { get; set; } = "";
     public string? ErrorMessage { get; set; }
     public string ProtectedSnapshot { get; set; } = "";
+    public bool Durable { get; set; }
+    public long RemoteLogOffset { get; set; }
 }
 
 public sealed record DeploymentSnapshot(DeploymentProject Project, GitConnection Connection);

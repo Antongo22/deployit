@@ -8,53 +8,94 @@ using Microsoft.EntityFrameworkCore;
 namespace DeployIt.Services;
 
 public sealed class DeploymentWorker(IDbContextFactory<DeployItDbContext> factory,
-    SshDeploymentService ssh, SecretProtector secrets, ILogger<DeploymentWorker> logger) : BackgroundService
+    SshDeploymentService ssh, SecretProtector secrets, ILogger<DeploymentWorker> logger,
+    IConfiguration configuration) : BackgroundService
 {
     private const int MaxLogLength = 1_000_000;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        var parallelism = configuration.GetValue("Deployments:MaxParallelDeployments", 4);
+        if (parallelism is < 1 or > 32)
+            throw new InvalidOperationException("Deployments:MaxParallelDeployments must be between 1 and 32.");
         await using (var db = await factory.CreateDbContextAsync(stoppingToken))
         {
-            await db.Deployments.Where(d => d.Status == DeploymentStatus.Running).ExecuteUpdateAsync(update => update
+            await db.Deployments.Where(d => d.Status == DeploymentStatus.Running && !d.Durable).ExecuteUpdateAsync(update => update
                 .SetProperty(d => d.Status, DeploymentStatus.Interrupted)
                 .SetProperty(d => d.FinishedAt, DateTimeOffset.UtcNow)
                 .SetProperty(d => d.ProtectedSnapshot, "")
                 .SetProperty(d => d.ErrorMessage, "Панель была перезапущена. Результат удалённой команды неизвестен; проверьте сервер перед повторным запуском.")
                 .SetProperty(d => d.Log, d => d.Log + "\nПанель была перезапущена. Проверьте сервер.\n"), stoppingToken);
         }
-        while (!stoppingToken.IsCancellationRequested)
+        var active = new Dictionary<Guid, Task>();
+        try
         {
-            try
+            while (!stoppingToken.IsCancellationRequested)
             {
-                await using var db = await factory.CreateDbContextAsync(stoppingToken);
-                var next = await db.Deployments.AsNoTracking().Where(d => d.Status == DeploymentStatus.Queued)
-                    .OrderBy(d => d.CreatedAt).FirstOrDefaultAsync(stoppingToken);
-                if (next is null) { await Task.Delay(1000, stoppingToken); continue; }
-                var claimed = await db.Deployments.Where(d => d.Id == next.Id && d.Status == DeploymentStatus.Queued)
-                    .ExecuteUpdateAsync(u => u.SetProperty(d => d.Status, DeploymentStatus.Running)
-                        .SetProperty(d => d.StartedAt, DateTimeOffset.UtcNow), stoppingToken);
-                if (claimed == 1) await RunAsync(next, stoppingToken);
-            }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
-            catch (Exception e)
-            {
-                // Credentials, commands and output never enter application logs.
-                logger.LogError("Deployment queue error: {ExceptionType}", e.GetType().Name);
-                try { await Task.Delay(2000, stoppingToken); }
+                // Observe every task before releasing its slot. One failed run must not stop others.
+                foreach (var completed in active.Where(pair => pair.Value.IsCompleted).ToArray())
+                {
+                    try { await completed.Value; }
+                    catch (Exception e) { logger.LogError("Deployment task error: {ExceptionType}", e.GetType().Name); }
+                    active.Remove(completed.Key);
+                }
+                try
+                {
+                    var slots = parallelism - active.Count;
+                    if (slots > 0)
+                    {
+                        await using var db = await factory.CreateDbContextAsync(stoppingToken);
+                        var activeIds = active.Keys.ToArray();
+                        var candidates = await db.Deployments.AsNoTracking()
+                            .Where(d => !activeIds.Contains(d.Id) && (d.Status == DeploymentStatus.Queued
+                                || (d.Status == DeploymentStatus.Running && d.Durable)))
+                            .OrderBy(d => d.Status == DeploymentStatus.Running ? 0 : 1)
+                            .ThenBy(d => d.CreatedAt).Take(slots).ToListAsync(stoppingToken);
+                        foreach (var next in candidates)
+                        {
+                            var resume = next.Status == DeploymentStatus.Running;
+                            if (!resume)
+                            {
+                                // Keep the conditional claim: a simultaneous queue cancellation wins safely.
+                                var claimed = await db.Deployments.Where(d => d.Id == next.Id && d.Status == DeploymentStatus.Queued)
+                                    .ExecuteUpdateAsync(u => u.SetProperty(d => d.Status, DeploymentStatus.Running)
+                                        .SetProperty(d => d.Durable, true)
+                                        .SetProperty(d => d.StartedAt, DateTimeOffset.UtcNow), stoppingToken);
+                                if (claimed != 1) continue;
+                                next.Durable = true;
+                            }
+                            // RunAsync already uses asynchronous SSH and database I/O; don't await the whole run here.
+                            active.Add(next.Id, RunAsync(next, stoppingToken, resume));
+                        }
+                    }
+                    await Task.Delay(500, stoppingToken);
+                }
                 catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
+                catch (Exception e)
+                {
+                    // Credentials, commands and output never enter application logs.
+                    logger.LogError("Deployment queue error: {ExceptionType}", e.GetType().Name);
+                    try { await Task.Delay(2000, stoppingToken); }
+                    catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
+                }
             }
+        }
+        finally
+        {
+            // Finish each run's checkpoint and preserve its snapshot before the host closes the database.
+            try { await Task.WhenAll(active.Values); }
+            catch (Exception e) { logger.LogError("Deployment shutdown error: {ExceptionType}", e.GetType().Name); }
         }
     }
 
-    private async Task RunAsync(Deployment deployment, CancellationToken stoppingToken)
+    private async Task RunAsync(Deployment deployment, CancellationToken stoppingToken, bool resume = false)
     {
         using var logLock = new SemaphoreSlim(1, 1);
         using var execution = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
         using var watcher = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
         var sensitive = new List<string>();
-        var stage = "ssh";
-        var tail = "";
+        var stage = resume && deployment.Stage != "" ? deployment.Stage : "ssh";
+        var tail = resume ? deployment.Log[^Math.Min(16000, deployment.Log.Length)..] : "";
         string Redact(string text)
         {
             foreach (var value in sensitive.Where(s => !string.IsNullOrEmpty(s)).OrderByDescending(s => s.Length))
@@ -119,11 +160,17 @@ public sealed class DeploymentWorker(IDbContextFactory<DeployItDbContext> factor
             sensitive.Add(password);
             sensitive.AddRange(password.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries));
             monitor = WatchCancellation(snapshot.Project);
-            exit = deployment.Operation switch
+            async Task Checkpoint(long offset) {
+                await using var checkpointDb = await factory.CreateDbContextAsync();
+                await checkpointDb.Deployments.Where(d => d.Id == deployment.Id)
+                    .ExecuteUpdateAsync(u => u.SetProperty(d => d.RemoteLogOffset, offset));
+            }
+            if (resume) await Append("Панель перезапущена. Проверяем прежний удалённый запуск без повторного выполнения команды.");
+            exit = resume ? await ssh.ResumeAsync(snapshot, deployment.Id, Append, execution.Token, deployment.RemoteLogOffset, Checkpoint) : deployment.Operation switch
             {
-                DeploymentOperation.Restart => await ssh.RestartAsync(snapshot, Append, execution.Token, deployment.Id),
-                DeploymentOperation.Stop => await ssh.StopAsync(snapshot, deployment.Id, Append, execution.Token),
-                DeploymentOperation.Deploy => await ssh.DeployAsync(snapshot, deployment.Id, Append, execution.Token),
+                DeploymentOperation.Restart => await ssh.RestartAsync(snapshot, Append, execution.Token, deployment.Id, deployment.RemoteLogOffset, Checkpoint),
+                DeploymentOperation.Stop => await ssh.StopAsync(snapshot, deployment.Id, Append, execution.Token, deployment.RemoteLogOffset, Checkpoint),
+                DeploymentOperation.Deploy => await ssh.DeployAsync(snapshot, deployment.Id, Append, execution.Token, deployment.RemoteLogOffset, Checkpoint),
                 _ => throw new DomainException("Неизвестное действие проекта. Обновите панель и повторите запуск.")
             };
             status = exit == 0 ? DeploymentStatus.Succeeded : DeploymentStatus.Failed;
@@ -133,6 +180,11 @@ public sealed class DeploymentWorker(IDbContextFactory<DeployItDbContext> factor
         {
             status = DeploymentStatus.Interrupted;
             error = "Выполнение прервано. Результат удалённой команды неизвестен; проверьте сервер.";
+        }
+        catch (RemoteOutcomeUnknownException e)
+        {
+            status = DeploymentStatus.Interrupted;
+            error = e.Message;
         }
         catch (Exception e)
         {
@@ -147,6 +199,11 @@ public sealed class DeploymentWorker(IDbContextFactory<DeployItDbContext> factor
                 catch (OperationCanceledException) { }
                 catch (Exception e) { stopError = $"Проверка запроса остановки не завершена ({e.GetType().Name})."; }
             }
+        }
+        if (stoppingToken.IsCancellationRequested && deployment.Durable && !requested)
+        {
+            await Append("Панель остановлена. Удалённый запуск продолжает работать автономно; проверка результата возобновится после запуска панели.");
+            return;
         }
         if (requested && status != DeploymentStatus.Succeeded)
         {

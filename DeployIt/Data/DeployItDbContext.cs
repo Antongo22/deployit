@@ -53,6 +53,10 @@ public sealed class DeployItDbContext(DbContextOptions<DeployItDbContext> option
             await Database.ExecuteSqlRawAsync("ALTER TABLE \"Deployments\" ADD COLUMN \"Stage\" TEXT NOT NULL DEFAULT '';", ct);
         if (!columns.Contains("ErrorMessage"))
             await Database.ExecuteSqlRawAsync("ALTER TABLE \"Deployments\" ADD COLUMN \"ErrorMessage\" TEXT NULL;", ct);
+        if (!columns.Contains("Durable"))
+            await Database.ExecuteSqlRawAsync("ALTER TABLE \"Deployments\" ADD COLUMN \"Durable\" INTEGER NOT NULL DEFAULT 0;", ct);
+        if (!columns.Contains("RemoteLogOffset"))
+            await Database.ExecuteSqlRawAsync("ALTER TABLE \"Deployments\" ADD COLUMN \"RemoteLogOffset\" INTEGER NOT NULL DEFAULT 0;", ct);
         // Replace the old one-project-per-server constraint without rebuilding tables
         // or changing existing project IDs, credentials and deployment snapshots.
         await Database.ExecuteSqlRawAsync("DROP INDEX IF EXISTS \"IX_Projects_Host_Port\";", ct);
@@ -68,6 +72,8 @@ public sealed class DeployItDbContext(DbContextOptions<DeployItDbContext> option
         model.Entity<DeploymentProject>().Property(p => p.StopCommand).HasDefaultValue("docker compose stop");
         model.Entity<DeploymentProject>().Property(p => p.RequiresReview).HasDefaultValue(false);
         model.Entity<Deployment>().Property(d => d.Operation).HasDefaultValue(DeploymentOperation.Deploy);
+        model.Entity<Deployment>().Property(d => d.Durable).HasDefaultValue(false);
+        model.Entity<Deployment>().Property(d => d.RemoteLogOffset).HasDefaultValue(0L);
         model.Entity<DeploymentProject>().HasIndex(p => p.RepositoryUrl).IsUnique();
         model.Entity<DeploymentProject>().HasIndex(p => new { p.Host, p.Port, p.WorkingDirectory }).IsUnique();
         model.Entity<DeploymentProject>().HasOne(p => p.Connection).WithMany()

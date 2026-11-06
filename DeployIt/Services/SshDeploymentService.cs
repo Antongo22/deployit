@@ -30,7 +30,7 @@ public sealed partial class SshDeploymentService(SecretProtector secrets) : IPro
         try
         {
             await client.ConnectAsync(ct);
-            using var command = client.CreateCommand("bash -lc 'set -e; command -v git; command -v bash; command -v timeout; command -v flock; printf SSH_OK'");
+            using var command = client.CreateCommand("bash -lc 'set -e; command -v git; command -v bash; command -v timeout; command -v flock; command -v nohup; command -v setsid; command -v sed; command -v base64; command -v dd; printf SSH_OK'");
             command.CommandTimeout = TimeSpan.FromSeconds(15);
             await command.ExecuteAsync(ct);
             if (command.ExitStatus != 0) throw new DomainException("На сервере нужны bash, git, timeout и flock.");
@@ -43,7 +43,7 @@ public sealed partial class SshDeploymentService(SecretProtector secrets) : IPro
     }
 
     public async Task<int> DeployAsync(DeploymentSnapshot snapshot, Guid runId,
-        Func<string, Task> log, CancellationToken ct)
+        Func<string, Task> log, CancellationToken ct, long offset = 0, Func<long, Task>? checkpoint = null)
     {
         var project = snapshot.Project;
         using var key = LoadKey(project);
@@ -55,6 +55,8 @@ public sealed partial class SshDeploymentService(SecretProtector secrets) : IPro
         catch (SshAuthenticationException) { throw AuthenticationError(project); }
         var credentialsDirectory = "/tmp/deployit-" + runId.ToString("N");
         var token = snapshot.Connection.PublicOnly ? "" : secrets.Unprotect(snapshot.Connection.ProtectedToken);
+        var monitoring = false;
+        var completed = false;
         try
         {
             if (token != "")
@@ -71,19 +73,16 @@ public sealed partial class SshDeploymentService(SecretProtector secrets) : IPro
                 Upload(sftp, credentialsDirectory + "/askpass", "#!/bin/sh\ncase \"$1\" in\n*Username*) printf '%s' " + Quote(gitUsername) + " ;;\n*) cat "
                     + Quote(credentialsDirectory + "/token") + " ;;\nesac\n", 700);
             }
-            using var command = client.CreateCommand(BuildCommand(project, runId, token != ""));
-            command.CommandTimeout = TimeSpan.FromMinutes(project.TimeoutMinutes) + TimeSpan.FromSeconds(45);
             await log("Получение кода и выполнение команды деплоя…");
-            var execute = command.ExecuteAsync(ct);
-            var stdout = ReadAsync(command.OutputStream, log, ct);
-            var stderr = ReadAsync(command.ExtendedOutputStream, line => log("[stderr] " + line), ct);
-            await Task.WhenAll(execute, stdout, stderr);
-            return CommandExitCode(command);
+            monitoring = true;
+            var result = await RunResilientAsync(project, runId, BuildCommand(project, runId, token != ""), log, ct, offset, checkpoint);
+            completed = true;
+            return result;
         }
         finally
         {
             // The shell trap also removes these files if the app loses the SSH connection.
-            if (token != "" && client.IsConnected)
+            if (token != "" && client.IsConnected && (!monitoring || completed))
             {
                 try
                 {
@@ -142,32 +141,24 @@ public sealed partial class SshDeploymentService(SecretProtector secrets) : IPro
         return $"timeout --signal=TERM --kill-after=15s {project.TimeoutMinutes * 60}s bash --noprofile --norc -c {Quote(script)}";
     }
 
-    public async Task<int> RestartAsync(DeploymentSnapshot snapshot, Func<string, Task> log, CancellationToken ct, Guid? runId = null)
-        => await RunCurrentReleaseAsync(snapshot, runId ?? Guid.NewGuid(), DeploymentOperation.Restart, log, ct);
+    public async Task<int> RestartAsync(DeploymentSnapshot snapshot, Func<string, Task> log, CancellationToken ct, Guid? runId = null,
+        long offset = 0, Func<long, Task>? checkpoint = null)
+        => await RunCurrentReleaseAsync(snapshot, runId ?? Guid.NewGuid(), DeploymentOperation.Restart, log, ct, offset, checkpoint);
 
-    public async Task<int> StopAsync(DeploymentSnapshot snapshot, Guid runId, Func<string, Task> log, CancellationToken ct)
-        => await RunCurrentReleaseAsync(snapshot, runId, DeploymentOperation.Stop, log, ct);
+    public async Task<int> StopAsync(DeploymentSnapshot snapshot, Guid runId, Func<string, Task> log, CancellationToken ct,
+        long offset = 0, Func<long, Task>? checkpoint = null)
+        => await RunCurrentReleaseAsync(snapshot, runId, DeploymentOperation.Stop, log, ct, offset, checkpoint);
 
     private async Task<int> RunCurrentReleaseAsync(DeploymentSnapshot snapshot, Guid runId,
-        DeploymentOperation operation, Func<string, Task> log, CancellationToken ct)
+        DeploymentOperation operation, Func<string, Task> log, CancellationToken ct, long offset, Func<long, Task>? checkpoint)
     {
         var project = snapshot.Project;
-        using var key = LoadKey(project);
-        using var client = new SshClient(Connection(project, key));
-        Pin(client, project.HostFingerprint);
         await log("DEPLOYIT_STAGE=ssh");
         await log(operation == DeploymentOperation.Stop
             ? "Подключение к SSH-серверу для остановки проекта…" : "Подключение к SSH-серверу для перезапуска…");
-        try { await client.ConnectAsync(ct); }
-        catch (SshAuthenticationException) { throw AuthenticationError(project); }
-        using var command = client.CreateCommand(BuildCurrentReleaseCommand(project, runId, operation));
-        command.CommandTimeout = TimeSpan.FromMinutes(project.TimeoutMinutes) + TimeSpan.FromSeconds(45);
         await log(operation == DeploymentOperation.Stop
             ? "Остановка текущего релиза…" : "Перезапуск текущего релиза без загрузки кода из репозитория…");
-        var execute = command.ExecuteAsync(ct);
-        await Task.WhenAll(execute, ReadAsync(command.OutputStream, log, ct),
-            ReadAsync(command.ExtendedOutputStream, line => log("[stderr] " + line), ct));
-        return CommandExitCode(command);
+        return await RunResilientAsync(project, runId, BuildCurrentReleaseCommand(project, runId, operation), log, ct, offset, checkpoint);
     }
 
     public static string BuildRestartCommand(DeploymentProject project, Guid? runId = null)
@@ -228,8 +219,11 @@ public sealed partial class SshDeploymentService(SecretProtector secrets) : IPro
         project.AuthenticationType == SshAuthenticationType.Password
             ? "SSH-сервер отклонил вход по паролю. Проверьте логин и пароль пользователя; на сервере должен быть разрешён вход по паролю. Пример: для ssh deploy@app.example.com укажите SSH-пользователя deploy и его пароль на сервере."
             : "SSH-сервер отклонил вход по ключу. Проверьте SSH-пользователя и ключ. Например, для пользователя deploy публичная часть ключа должна находиться в /home/deploy/.ssh/authorized_keys.");
-    private static void Pin(BaseClient client, string fingerprint) => client.HostKeyReceived += (_, e) =>
-        e.CanTrust = "SHA256:" + e.FingerPrintSHA256 == fingerprint;
+    private static void Pin(BaseClient client, string fingerprint)
+    {
+        client.KeepAliveInterval = TimeSpan.FromSeconds(15);
+        client.HostKeyReceived += (_, e) => e.CanTrust = "SHA256:" + e.FingerPrintSHA256 == fingerprint;
+    }
     private static void Upload(SftpClient client, string path, string content, short mode)
     {
         using var stream = new MemoryStream(Encoding.UTF8.GetBytes(content));

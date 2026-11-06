@@ -302,7 +302,7 @@ public sealed partial class ProjectService(IDbContextFactory<DeployItDbContext> 
         if (await db.Deployments.AnyAsync(d => d.ProjectId == projectId &&
             (d.Status == DeploymentStatus.Queued || d.Status == DeploymentStatus.Running), ct))
             throw new DomainException("Деплой, перезапуск или остановка этого проекта уже в очереди или выполняется. Дождитесь завершения или прервите текущий запуск.", 409);
-        var run = new Deployment { ProjectId = projectId, Operation = operation,
+        var run = new Deployment { ProjectId = projectId, Operation = operation, Durable = true,
             ProtectedSnapshot = secrets.Protect(JsonSerializer.Serialize(new DeploymentSnapshot(project, project.Connection))) };
         db.Deployments.Add(run);
         try { await db.SaveChangesAsync(ct); }

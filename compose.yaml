@@ -11,6 +11,7 @@ services:
       DataDirectory: /data
       Admin__Username: ${DEPLOYIT_ADMIN_USERNAME:-admin}
       Admin__Password: ${DEPLOYIT_ADMIN_PASSWORD:-}
+      Deployments__MaxParallelDeployments: ${DEPLOYIT_MAX_PARALLEL_DEPLOYMENTS:-4}
     volumes:
       - data:/data
     restart: unless-stopped
