@@ -40,11 +40,11 @@ else
             }
         </section>
         <section class="panel deploy-config"><div class="step"><span>03</span><h2>Как разворачиваем?</h2></div>
-            <div class="fields-row"><label>Корневой каталог на сервере<InputText class="mono" @bind-Value="input.WorkingDirectory" /><small>Код попадает в releases/&lt;id&gt;. После успеха обновляется ссылка current.</small></label><label>Таймаут, минут<InputNumber @bind-Value="input.TimeoutMinutes" min="1" max="120" /></label></div>
+            <div class="fields-row"><label>Корневой каталог на сервере<InputText class="mono" @bind-Value="input.WorkingDirectory" /><small>На одном сервере можно разместить несколько проектов. Укажите отдельный, невложенный каталог для каждого, например /opt/apps/my-app. Код попадает в releases/&lt;id&gt;; после успеха обновляется ссылка current.</small></label><label>Таймаут, минут<InputNumber @bind-Value="input.TimeoutMinutes" min="1" max="120" /></label></div>
             <label>Команда деплоя<InputTextArea class="mono" @bind-Value="input.DeployCommand" rows="4" /><small>Выполняется через bash из каталога полученного кода. Ненулевой код завершения означает ошибку.</small></label>
             <label>Команда перезапуска<InputTextArea class="mono" @bind-Value="input.RestartCommand" rows="3" /><small>Запускается из текущего релиза без загрузки репозитория. Пример для Compose: docker compose up -d --force-recreate --no-build. Для systemd укажите команду перезапуска своего сервиса.</small></label>
             <label>Команда остановки<InputTextArea class="mono" @bind-Value="input.StopCommand" rows="3" /><small>Выполняется из текущего успешного релиза. Пример для Compose: docker compose stop. Для systemd: sudo -n systemctl stop my-app. По умолчанию контейнеры останавливаются с сохранением томов и файлов проекта.</small></label>
-            <div class="form-note">Доступны <code>DEPLOYIT_RELEASE_DIR</code>, <code>DEPLOYIT_PROJECT_DIR</code>, <code>DEPLOYIT_ENV_FILE</code> и стабильный <code>COMPOSE_PROJECT_NAME</code>. Серверный .env редактируется на странице проекта.</div>
+            <div class="form-note">Доступны <code>DEPLOYIT_RELEASE_DIR</code>, <code>DEPLOYIT_PROJECT_DIR</code>, <code>DEPLOYIT_ENV_FILE</code> и стабильный <code>COMPOSE_PROJECT_NAME</code>. Серверный .env редактируется на странице проекта. Для приложений на одном сервере задавайте разные внешние порты и, если используете <code>container_name</code>, разные имена контейнеров.</div>
         </section>
     </div>
     <div class="editor-actions"><a href="/" class="button">Отмена</a><button class="button primary" type="submit" disabled="@(busy || probing || repositoriesLoading)">@(busy ? "Сохраняем…" : "Сохранить проект ↗")</button></div>

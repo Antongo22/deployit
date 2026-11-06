@@ -51,6 +51,10 @@ public sealed class DeployItDbContext(DbContextOptions<DeployItDbContext> option
             await Database.ExecuteSqlRawAsync("ALTER TABLE \"Deployments\" ADD COLUMN \"Stage\" TEXT NOT NULL DEFAULT '';", ct);
         if (!columns.Contains("ErrorMessage"))
             await Database.ExecuteSqlRawAsync("ALTER TABLE \"Deployments\" ADD COLUMN \"ErrorMessage\" TEXT NULL;", ct);
+        // Replace the old one-project-per-server constraint without rebuilding tables
+        // or changing existing project IDs, credentials and deployment snapshots.
+        await Database.ExecuteSqlRawAsync("DROP INDEX IF EXISTS \"IX_Projects_Host_Port\";", ct);
+        await Database.ExecuteSqlRawAsync("CREATE UNIQUE INDEX IF NOT EXISTS \"IX_Projects_Host_Port_WorkingDirectory\" ON \"Projects\" (\"Host\", \"Port\", \"WorkingDirectory\");", ct);
         await transaction.CommitAsync(ct);
     }
 
@@ -62,7 +66,7 @@ public sealed class DeployItDbContext(DbContextOptions<DeployItDbContext> option
         model.Entity<DeploymentProject>().Property(p => p.StopCommand).HasDefaultValue("docker compose stop");
         model.Entity<Deployment>().Property(d => d.Operation).HasDefaultValue(DeploymentOperation.Deploy);
         model.Entity<DeploymentProject>().HasIndex(p => p.RepositoryUrl).IsUnique();
-        model.Entity<DeploymentProject>().HasIndex(p => new { p.Host, p.Port }).IsUnique();
+        model.Entity<DeploymentProject>().HasIndex(p => new { p.Host, p.Port, p.WorkingDirectory }).IsUnique();
         model.Entity<DeploymentProject>().HasOne(p => p.Connection).WithMany()
             .HasForeignKey(p => p.ConnectionId).OnDelete(DeleteBehavior.Restrict);
         model.Entity<Deployment>().Property(d => d.Status).HasConversion<string>();

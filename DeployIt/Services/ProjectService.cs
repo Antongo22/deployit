@@ -115,7 +115,8 @@ public sealed class ProjectService(IDbContextFactory<DeployItDbContext> factory,
             || input.Branch.Contains("..") || input.Branch.Contains("//") || input.Branch.Contains("@{")
             || input.Branch.EndsWith('/') || input.Branch.Split('/').Any(s => s.StartsWith('.') || s.EndsWith('.') || s.EndsWith(".lock")))
             throw new DomainException("Некорректное имя ветки Git.");
-        if (!input.WorkingDirectory.StartsWith('/') || input.WorkingDirectory == "/"
+        var workingDirectory = "/" + string.Join('/', input.WorkingDirectory.Split('/', StringSplitOptions.RemoveEmptyEntries));
+        if (!input.WorkingDirectory.StartsWith('/') || workingDirectory == "/"
             || input.WorkingDirectory.Any(char.IsControl) || input.WorkingDirectory.Split('/').Any(s => s is "." or ".."))
             throw new DomainException("Укажите абсолютный отдельный каталог проекта, например /opt/apps/my-app.");
         if (string.IsNullOrWhiteSpace(input.DeployCommand) || input.DeployCommand.Contains('\0'))
@@ -136,9 +137,17 @@ public sealed class ProjectService(IDbContextFactory<DeployItDbContext> factory,
             ?? throw new DomainException("Выберите Git-подключение.");
         var repository = await git.RepositoryAsync(connection, input.RepositoryId, ct);
         var host = input.Host.Trim().ToLowerInvariant();
-        if (await db.Projects.AnyAsync(p => p.Id != project.Id && (p.RepositoryUrl == repository.CloneUrl
-            || (p.Host == host && p.Port == input.Port)), ct))
-            throw new DomainException("Репозиторий или сервер уже привязан к другому проекту (связь 1:1).", 409);
+        if (await db.Projects.AnyAsync(p => p.Id != project.Id && p.RepositoryUrl == repository.CloneUrl, ct))
+            throw new DomainException("Репозиторий уже привязан к другому проекту.", 409);
+        var serverDirectories = await db.Projects.AsNoTracking()
+            .Where(p => p.Id != project.Id && p.Host == host && p.Port == input.Port)
+            .Select(p => p.WorkingDirectory).ToListAsync(ct);
+        if (serverDirectories.Any(path => {
+            var existing = "/" + string.Join('/', path.Split('/', StringSplitOptions.RemoveEmptyEntries));
+            return existing == workingDirectory || existing.StartsWith(workingDirectory + "/", StringComparison.Ordinal)
+                || workingDirectory.StartsWith(existing + "/", StringComparison.Ordinal);
+        }))
+            throw new DomainException("Каталоги проектов на одном сервере не должны совпадать или быть вложены друг в друга. Укажите отдельный каталог, например /opt/apps/my-app.", 409);
         if (input.AuthenticationType == SshAuthenticationType.Password)
         {
             if (!string.IsNullOrEmpty(input.Password))
@@ -170,13 +179,13 @@ public sealed class ProjectService(IDbContextFactory<DeployItDbContext> factory,
         project.RepositoryUrl = repository.CloneUrl; project.Branch = input.Branch;
         project.Host = host; project.Port = input.Port; project.Username = input.Username;
         project.HostFingerprint = input.HostFingerprint.Trim();
-        project.WorkingDirectory = input.WorkingDirectory.TrimEnd('/');
+        project.WorkingDirectory = workingDirectory;
         project.DeployCommand = input.DeployCommand; project.RestartCommand = input.RestartCommand;
         project.StopCommand = input.StopCommand;
         project.TimeoutMinutes = input.TimeoutMinutes;
         if (!id.HasValue) db.Projects.Add(project);
         try { await db.SaveChangesAsync(ct); }
-        catch (DbUpdateException) { throw new DomainException("Репозиторий или сервер уже занят другим проектом.", 409); }
+        catch (DbUpdateException) { throw new DomainException("Репозиторий или каталог на этом сервере уже занят другим проектом.", 409); }
         return View(project, null);
     }
 

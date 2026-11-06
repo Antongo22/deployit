@@ -39,15 +39,99 @@ public sealed class DeploymentTests
     }
 
     [Fact]
-    public async Task RepositoryAndServerMappingsAreOneToOne()
+    public async Task DifferentProjectsCanShareServerAndQueueIndependently()
+    {
+        using var fixture = new Fixture();
+        var connection = await fixture.Connect();
+        var firstInput = fixture.Input(connection.Id);
+        var first = await fixture.Service.SaveProjectAsync(firstInput);
+        var secondInput = fixture.Input(connection.Id);
+        secondInput.RepositoryId = "2"; secondInput.Host = "SERVER";
+        secondInput.WorkingDirectory = "/opt/deployit/api//";
+        var second = await fixture.Service.SaveProjectAsync(secondInput);
+        Assert.Equal(first.Host, second.Host);
+        Assert.Equal(first.Port, second.Port);
+        Assert.Equal("/opt/deployit/api", second.WorkingDirectory);
+        Assert.Equal(second.Id, (await fixture.Service.SaveProjectAsync(secondInput, second.Id)).Id);
+        await fixture.Service.EnqueueAsync(first.Id);
+        await fixture.Service.EnqueueAsync(second.Id);
+        Assert.Single(await fixture.Service.HistoryAsync(first.Id));
+        Assert.Single(await fixture.Service.HistoryAsync(second.Id));
+    }
+
+    [Fact]
+    public async Task RepositoryStillBelongsToOneProject()
     {
         using var fixture = new Fixture();
         var connection = await fixture.Connect();
         await fixture.Service.SaveProjectAsync(fixture.Input(connection.Id));
         var duplicateRepo = fixture.Input(connection.Id); duplicateRepo.Host = "other-server";
         Assert.Equal(409, (await Assert.ThrowsAsync<DomainException>(() => fixture.Service.SaveProjectAsync(duplicateRepo))).StatusCode);
-        var duplicateHost = fixture.Input(connection.Id); duplicateHost.RepositoryId = "2";
-        Assert.Equal(409, (await Assert.ThrowsAsync<DomainException>(() => fixture.Service.SaveProjectAsync(duplicateHost))).StatusCode);
+    }
+
+    [Theory]
+    [InlineData("/opt/deployit/app")]
+    [InlineData("/opt//deployit/app///")]
+    [InlineData("/opt/deployit/app/api")]
+    [InlineData("/opt/deployit")]
+    public async Task SharedOrNestedDirectoriesAreRejectedOnCreateAndEdit(string path)
+    {
+        using var fixture = new Fixture();
+        var connection = await fixture.Connect();
+        await fixture.Service.SaveProjectAsync(fixture.Input(connection.Id));
+        var input = fixture.Input(connection.Id);
+        input.RepositoryId = "2"; input.Username = "another-user";
+        input.WorkingDirectory = "/opt/deployit/app-other";
+        var second = await fixture.Service.SaveProjectAsync(input);
+        input.WorkingDirectory = path;
+        Assert.Equal(409, (await Assert.ThrowsAsync<DomainException>(() => fixture.Service.SaveProjectAsync(input, second.Id))).StatusCode);
+        Assert.Equal(second.WorkingDirectory, (await fixture.Service.ProjectAsync(second.Id)).WorkingDirectory);
+        await fixture.Service.DeleteProjectAsync(second.Id);
+        Assert.Equal(409, (await Assert.ThrowsAsync<DomainException>(() => fixture.Service.SaveProjectAsync(input))).StatusCode);
+    }
+
+    [Fact]
+    public async Task SeparateServersCanUseSameDirectory()
+    {
+        using var fixture = new Fixture();
+        var connection = await fixture.Connect();
+        var first = await fixture.Service.SaveProjectAsync(fixture.Input(connection.Id));
+        var input = fixture.Input(connection.Id); input.RepositoryId = "2"; input.Host = "other-server";
+        Assert.Equal(first.WorkingDirectory, (await fixture.Service.SaveProjectAsync(input)).WorkingDirectory);
+    }
+
+    [Fact]
+    public async Task ExistingDatabaseUpgradePreservesProjectsSecretsAndQueuedHistory()
+    {
+        using var fixture = new Fixture();
+        var connection = await fixture.Connect();
+        var first = await fixture.Service.SaveProjectAsync(fixture.Input(connection.Id));
+        var run = await fixture.Service.EnqueueAsync(first.Id);
+        await using var db = fixture.Factory.CreateDbContext();
+        var before = await db.Projects.AsNoTracking().SingleAsync();
+        var snapshot = (await db.Deployments.AsNoTracking().SingleAsync()).ProtectedSnapshot;
+        // Reproduce the index used by existing installations, then run startup twice.
+        await db.Database.ExecuteSqlRawAsync("DROP INDEX \"IX_Projects_Host_Port_WorkingDirectory\";");
+        await db.Database.ExecuteSqlRawAsync("CREATE UNIQUE INDEX \"IX_Projects_Host_Port\" ON \"Projects\" (\"Host\", \"Port\");");
+        await db.InitializeAsync();
+        await db.InitializeAsync();
+        var input = fixture.Input(connection.Id); input.RepositoryId = "2"; input.WorkingDirectory = "/opt/deployit/api";
+        var second = await fixture.Service.SaveProjectAsync(input);
+        await fixture.Service.EnqueueAsync(second.Id);
+        var after = await db.Projects.AsNoTracking().SingleAsync(p => p.Id == first.Id);
+        Assert.Equal(before.ProtectedPrivateKey, after.ProtectedPrivateKey);
+        Assert.Equal(before.WorkingDirectory, after.WorkingDirectory);
+        Assert.Equal(before.RepositoryUrl, after.RepositoryUrl);
+        Assert.Equal(before.HostFingerprint, after.HostFingerprint);
+        Assert.Equal(snapshot, (await db.Deployments.AsNoTracking().SingleAsync(d => d.Id == run.Id)).ProtectedSnapshot);
+        Assert.Equal(DeploymentStatus.Queued, (await fixture.Service.HistoryAsync(first.Id)).Single().Status);
+        Assert.Equal(2, await db.Projects.CountAsync());
+        Assert.Single(await db.Connections.ToListAsync());
+
+        // The new database constraint still rejects an exact server/directory collision.
+        db.Projects.Add(new DeploymentProject { ConnectionId = connection.Id, RepositoryUrl = "https://example.invalid/third.git",
+            Host = first.Host, Port = first.Port, WorkingDirectory = first.WorkingDirectory });
+        await Assert.ThrowsAsync<DbUpdateException>(() => db.SaveChangesAsync());
     }
 
     [Fact]
@@ -245,6 +329,50 @@ public sealed class DeploymentTests
                 Assert.Equal(7, (await Shell(SshDeploymentService.BuildCommand(project, Guid.NewGuid(), false))).ExitCode);
             Assert.Equal(3, Directory.GetDirectories(Path.Combine(project.WorkingDirectory, "releases")).Length);
             Assert.True(Directory.Exists(Path.Combine(project.WorkingDirectory, "releases", first.ToString("N"))));
+        } finally { Directory.Delete(directory, true); }
+    }
+
+    [LinuxFact]
+    public async Task ProjectsOnSameServerKeepSeparateEnvironmentReleasesAndLifecycle()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "deployit-shared-server-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try {
+            var repository = Path.Combine(directory, "source"); Directory.CreateDirectory(repository);
+            Assert.Equal(0, (await Shell($"git -C {SshDeploymentService.Quote(repository)} init --initial-branch=main")).ExitCode);
+            await File.WriteAllTextAsync(Path.Combine(repository, "README"), "fixture");
+            Assert.Equal(0, (await Shell($"git -C {SshDeploymentService.Quote(repository)} add README && git -C {SshDeploymentService.Quote(repository)} -c user.name=test -c user.email=test@example.invalid commit -m fixture")).ExitCode);
+            var projects = new[] { "site", "api" }.Select(name => new DeploymentProject {
+                Host = "same-server", RepositoryUrl = repository, WorkingDirectory = Path.Combine(directory, name),
+                Branch = "main", TimeoutMinutes = 1,
+                DeployCommand = "printf '%s' \"$COMPOSE_PROJECT_NAME\" > compose-name; cat .env > saved-env",
+                RestartCommand = "printf '%s' \"$COMPOSE_PROJECT_NAME\" > restarted",
+                StopCommand = "printf '%s' \"$COMPOSE_PROJECT_NAME\" > stopped"
+            }).ToArray();
+            var runs = new[] { Guid.NewGuid(), Guid.NewGuid() };
+            for (var i = 0; i < projects.Length; i++) {
+                var project = projects[i];
+                Directory.CreateDirectory(project.WorkingDirectory);
+                await File.WriteAllTextAsync(Path.Combine(project.WorkingDirectory, ".env"), $"APP={i}");
+                var result = await Shell(SshDeploymentService.BuildCommand(project, runs[i], false));
+                Assert.True(result.ExitCode == 0, result.Output);
+                var current = Path.Combine(project.WorkingDirectory, "current");
+                Assert.Equal($"deployit-{project.Id:N}", await File.ReadAllTextAsync(Path.Combine(current, "compose-name")));
+                Assert.Equal($"APP={i}", await File.ReadAllTextAsync(Path.Combine(current, "saved-env")));
+            }
+            var first = projects[0]; var second = projects[1];
+            Assert.Equal(0, (await Shell(SshDeploymentService.BuildRestartCommand(first))).ExitCode);
+            Assert.Equal(0, (await Shell(SshDeploymentService.BuildStopCommand(first))).ExitCode);
+            Assert.Equal($"deployit-{first.Id:N}", await File.ReadAllTextAsync(Path.Combine(first.WorkingDirectory, "current", "stopped")));
+            Assert.False(File.Exists(Path.Combine(second.WorkingDirectory, "current", "stopped")));
+            Assert.False(File.Exists(Path.Combine(second.WorkingDirectory, "current", "restarted")));
+            Assert.Equal(0, (await Shell(SshDeploymentService.BuildStorageCommand(first, [runs[0]], false))).ExitCode);
+            Assert.Equal(0, (await Shell(SshDeploymentService.BuildStorageCommand(first, [runs[0]], true))).ExitCode);
+            Assert.False(Directory.Exists(first.WorkingDirectory));
+            Assert.Equal("APP=1", await File.ReadAllTextAsync(Path.Combine(second.WorkingDirectory, ".env")));
+            Assert.EndsWith(runs[1].ToString("N"), new DirectoryInfo(Path.Combine(second.WorkingDirectory, "current")).LinkTarget);
+            Assert.Equal(0, (await Shell(SshDeploymentService.BuildRestartCommand(second))).ExitCode);
+            Assert.Equal($"deployit-{second.Id:N}", await File.ReadAllTextAsync(Path.Combine(second.WorkingDirectory, "current", "restarted")));
         } finally { Directory.Delete(directory, true); }
     }
 
